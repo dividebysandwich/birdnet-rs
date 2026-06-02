@@ -16,7 +16,28 @@ use super::AppState;
 
 /// Load the model, start audio capture, and spawn the inference + action tasks.
 pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<CaptureHandle> {
-    let net = BirdNet::load(&settings.birdnet.model_path, &settings.birdnet.labels_path)?;
+    let mut net = BirdNet::load(&settings.birdnet.model_path, &settings.birdnet.labels_path)?;
+
+    // Optional location/date range filter.
+    let rf = &settings.birdnet.range_filter;
+    if rf.enabled {
+        if settings.birdnet.latitude == 0.0 && settings.birdnet.longitude == 0.0 {
+            tracing::warn!("range_filter enabled but latitude/longitude are 0 — skipping");
+        } else if !rf.model_path.exists() {
+            tracing::warn!("range model {} not found — skipping range filter", rf.model_path.display());
+        } else if let Err(e) = net.enable_range_filter(
+            &rf.model_path,
+            settings.birdnet.latitude,
+            settings.birdnet.longitude,
+            rf.threshold,
+            rf.rerank,
+        ) {
+            tracing::warn!("range filter disabled: {e}");
+        }
+    }
+
+    // Optional eBird taxonomy (species codes).
+    let taxonomy = load_taxonomy(&settings.birdnet.taxonomy_path);
 
     let (audio_rx, capture) = audio::start(&settings.realtime.audio.source)?;
     let (det_tx, mut det_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -27,7 +48,7 @@ pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<CaptureHand
         Settings::CLIP_LENGTH_SECONDS,
         settings.birdnet.overlap,
     );
-    let mut processor = Processor::new(net, settings);
+    let mut processor = Processor::new(net, settings, taxonomy);
     let mut audio_rx = audio_rx;
     let meter_sse = state.sse.clone();
 
@@ -61,6 +82,16 @@ pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<CaptureHand
             }
         })?;
 
+    // Clip retention (optional background cleanup).
+    let retention = &settings.realtime.audio.export.retention;
+    if retention.enabled {
+        super::diskmanager::spawn(
+            state.db.clone(),
+            settings.realtime.audio.export.path.clone(),
+            retention.max_age_days,
+        );
+    }
+
     // Actions: store + clip + broadcast.
     let dispatcher = ActionDispatcher::new(
         state.db.clone(),
@@ -74,4 +105,22 @@ pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<CaptureHand
     });
 
     Ok(capture)
+}
+
+/// Load the eBird taxonomy if present; missing/invalid files are non-fatal.
+fn load_taxonomy(path: &std::path::Path) -> Option<std::sync::Arc<crate::taxonomy::Taxonomy>> {
+    if !path.exists() {
+        tracing::info!("no taxonomy at {} — species codes will be empty", path.display());
+        return None;
+    }
+    match crate::taxonomy::Taxonomy::load(path) {
+        Ok(t) => {
+            tracing::info!("loaded eBird taxonomy ({} species)", t.len());
+            Some(std::sync::Arc::new(t))
+        }
+        Err(e) => {
+            tracing::warn!("taxonomy load failed: {e}");
+            None
+        }
+    }
 }

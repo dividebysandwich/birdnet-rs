@@ -20,6 +20,7 @@ pub struct DetectionDto {
     pub id: Option<i32>,
     pub common_name: String,
     pub scientific_name: String,
+    pub species_code: String,
     pub confidence: f64,
     pub source: String,
     pub clip_name: Option<String>,
@@ -27,20 +28,27 @@ pub struct DetectionDto {
     pub time: String,
     /// Full timestamp (RFC3339).
     pub timestamp: String,
+    /// Review status, if reviewed: `"correct"` or `"false_positive"`.
+    pub verified: Option<String>,
 }
 
 #[cfg(feature = "ssr")]
 impl DetectionDto {
-    pub fn from_note(n: &crate::store::entities::note::Model) -> DetectionDto {
+    pub fn from_note(
+        n: &crate::store::entities::note::Model,
+        review: Option<&crate::store::entities::note_review::Model>,
+    ) -> DetectionDto {
         DetectionDto {
             id: Some(n.id),
             common_name: n.common_name.clone(),
             scientific_name: n.scientific_name.clone(),
+            species_code: n.species_code.clone(),
             confidence: n.confidence,
             source: n.source.clone(),
             clip_name: n.clip_name.clone(),
             time: n.time.clone(),
             timestamp: n.timestamp.to_rfc3339(),
+            verified: review.map(|r| r.verified.clone()),
         }
     }
 
@@ -49,11 +57,13 @@ impl DetectionDto {
             id: d.id,
             common_name: d.common_name.clone(),
             scientific_name: d.scientific_name.clone(),
+            species_code: d.species_code.clone(),
             confidence: d.confidence as f64,
             source: d.source.clone(),
             clip_name: d.clip_name.clone(),
             time: d.timestamp.format("%H:%M:%S").to_string(),
             timestamp: d.timestamp.to_rfc3339(),
+            verified: None,
         }
     }
 }
@@ -79,7 +89,44 @@ pub async fn list_detections(limit: u32) -> Result<Vec<DetectionDto>, ServerFnEr
     let rows = repo::recent(&state.db, limit.max(1) as u64, 0)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    Ok(rows.iter().map(DetectionDto::from_note).collect())
+    Ok(rows
+        .iter()
+        .map(|(n, r)| DetectionDto::from_note(n, r.as_ref()))
+        .collect())
+}
+
+/// Server function: search detections by name / species code.
+#[server(endpoint = "search_detections")]
+pub async fn search_detections(
+    query: String,
+    limit: u32,
+) -> Result<Vec<DetectionDto>, ServerFnError> {
+    use crate::server::AppState;
+    use crate::store::repo;
+
+    let state = expect_context::<AppState>();
+    let rows = repo::search(&state.db, query.trim(), limit.max(1) as u64)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(rows
+        .iter()
+        .map(|(n, r)| DetectionDto::from_note(n, r.as_ref()))
+        .collect())
+}
+
+/// Server function: set a detection's review status (`correct` / `false_positive`).
+#[server(endpoint = "review_detection")]
+pub async fn review_detection(id: i32, verified: String) -> Result<(), ServerFnError> {
+    use crate::server::AppState;
+    use crate::store::repo;
+
+    if verified != "correct" && verified != "false_positive" {
+        return Err(ServerFnError::new("invalid review status"));
+    }
+    let state = expect_context::<AppState>();
+    repo::set_review(&state.db, id, &verified)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
 /// Document shell (server-rendered HTML wrapper around the app).
@@ -120,9 +167,25 @@ fn Dashboard() -> impl IntoView {
     let detections = RwSignal::new(Vec::<DetectionDto>::new());
     let level = RwSignal::new(AudioLevel::default());
     let connected = RwSignal::new(false);
+    let query = RwSignal::new(String::new());
 
     // Client-only: load initial data + open the live SSE stream after mount.
     Effect::new(move |_| setup_live(detections, level, connected));
+
+    // Reload the list from the current search query (empty → recent).
+    let reload = move || {
+        let q = query.get_untracked();
+        leptos::task::spawn_local(async move {
+            let res = if q.trim().is_empty() {
+                list_detections(50).await
+            } else {
+                search_detections(q, 50).await
+            };
+            if let Ok(list) = res {
+                detections.set(list);
+            }
+        });
+    };
 
     view! {
         <header>
@@ -158,12 +221,23 @@ fn Dashboard() -> impl IntoView {
             </section>
 
             <section class="panel">
-                <h2>"Detections"</h2>
+                <div class="panel-head">
+                    <h2>"Detections"</h2>
+                    <input
+                        class="search"
+                        type="search"
+                        placeholder="Search species or code…"
+                        on:input=move |ev| {
+                            query.set(event_target_value(&ev));
+                            reload();
+                        }
+                    />
+                </div>
                 <table>
                     <thead>
                         <tr>
                             <th>"Time"</th><th>"Species"</th><th>"Confidence"</th>
-                            <th>"Source"</th><th>"Spectrogram"</th><th>"Clip"</th>
+                            <th>"Source"</th><th>"Spectrogram"</th><th>"Clip"</th><th>"Review"</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -172,7 +246,7 @@ fn Dashboard() -> impl IntoView {
                             key=|d| (d.id, d.timestamp.clone())
                             let:d
                         >
-                            {detection_row(d)}
+                            {detection_row(d, detections)}
                         </For>
                     </tbody>
                 </table>
@@ -184,13 +258,32 @@ fn Dashboard() -> impl IntoView {
     }
 }
 
+/// Update a detection's review status both on the server and in the local list.
+fn submit_review(id: i32, status: &'static str, detections: RwSignal<Vec<DetectionDto>>) {
+    leptos::task::spawn_local(async move {
+        if review_detection(id, status.to_string()).await.is_ok() {
+            detections.update(|v| {
+                if let Some(d) = v.iter_mut().find(|d| d.id == Some(id)) {
+                    d.verified = Some(status.to_string());
+                }
+            });
+        }
+    });
+}
+
 /// Render one detection row.
-fn detection_row(d: DetectionDto) -> impl IntoView {
+fn detection_row(d: DetectionDto, detections: RwSignal<Vec<DetectionDto>>) -> impl IntoView {
     let pct = (d.confidence * 100.0).round() as i32;
     let id = d.id;
     let has_clip = d.clip_name.is_some() && id.is_some();
+    let verified = d.verified.clone();
+    let row_class = match verified.as_deref() {
+        Some("correct") => "reviewed-correct",
+        Some("false_positive") => "reviewed-false",
+        _ => "flash",
+    };
     view! {
-        <tr class="flash">
+        <tr class=row_class>
             <td>{d.time.clone()}</td>
             <td>
                 <div>{d.common_name.clone()}</div>
@@ -212,6 +305,19 @@ fn detection_row(d: DetectionDto) -> impl IntoView {
                     <audio controls preload="none"
                         src=format!("/media/clip/{}", id.unwrap())></audio>
                 })}
+            </td>
+            <td class="review">
+                {id.map(|id| view! {
+                    <button class="ok" title="Correct"
+                        on:click=move |_| submit_review(id, "correct", detections)>"✓"</button>
+                    <button class="no" title="False positive"
+                        on:click=move |_| submit_review(id, "false_positive", detections)>"✗"</button>
+                })}
+                <span class="verdict">{match verified.as_deref() {
+                    Some("correct") => "✓",
+                    Some("false_positive") => "✗",
+                    _ => "",
+                }}</span>
             </td>
         </tr>
     }

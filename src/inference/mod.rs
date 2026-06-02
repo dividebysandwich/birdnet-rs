@@ -8,8 +8,10 @@
 //! `Scientific_Common` label into the fields the rest of birdnet-rs uses.
 
 use std::path::Path;
+use std::sync::Mutex;
 
-use birdnet_onnx::{Classifier, InferenceOptions};
+use birdnet_onnx::{Classifier, InferenceOptions, LocationScore, RangeFilter};
+use chrono::Datelike;
 
 /// Top predictions to request per window. The processor applies the real
 /// (possibly dynamic) thresholds afterwards, so the classifier itself filters
@@ -24,11 +26,22 @@ pub struct Prediction {
     pub confidence: f32,
 }
 
+/// Optional location/date range filter, with per-day caching of location scores.
+struct RangeState {
+    filter: RangeFilter,
+    latitude: f32,
+    longitude: f32,
+    rerank: bool,
+    /// `(month*100 + day, scores)` — recomputed when the date changes.
+    cache: Mutex<(u32, Vec<LocationScore>)>,
+}
+
 /// A loaded BirdNET classifier ready to run inference.
 pub struct BirdNet {
     classifier: Classifier,
     options: InferenceOptions,
     sample_count: usize,
+    range: Option<RangeState>,
 }
 
 impl BirdNet {
@@ -53,7 +66,40 @@ impl BirdNet {
             sample_count,
         );
 
-        Ok(BirdNet { classifier, options: InferenceOptions::default(), sample_count })
+        Ok(BirdNet {
+            classifier,
+            options: InferenceOptions::default(),
+            sample_count,
+            range: None,
+        })
+    }
+
+    /// Attach a location/date range filter using the meta model at `model_path`.
+    /// Filters out (or, with `rerank`, down-weights) species implausible at the
+    /// given coordinates and date.
+    pub fn enable_range_filter(
+        &mut self,
+        model_path: &Path,
+        latitude: f64,
+        longitude: f64,
+        threshold: f32,
+        rerank: bool,
+    ) -> anyhow::Result<()> {
+        let filter = RangeFilter::builder()
+            .model_path(model_path.display().to_string())
+            .from_classifier_labels(self.classifier.labels())
+            .threshold(threshold)
+            .build()
+            .map_err(|e| anyhow::anyhow!("loading range model {}: {e}", model_path.display()))?;
+        self.range = Some(RangeState {
+            filter,
+            latitude: latitude as f32,
+            longitude: longitude as f32,
+            rerank,
+            cache: Mutex::new((0, Vec::new())),
+        });
+        tracing::info!("range filter enabled @ ({latitude}, {longitude})");
+        Ok(())
     }
 
     /// Number of mono 48 kHz samples the model expects per window.
@@ -77,7 +123,35 @@ impl BirdNet {
         };
 
         let result = self.classifier.predict(&segment, &self.options)?;
-        Ok(result.predictions.into_iter().map(split_label).collect())
+        let predictions = match &self.range {
+            Some(range) => range.apply(result.predictions),
+            None => result.predictions,
+        };
+        Ok(predictions.into_iter().map(split_label).collect())
+    }
+}
+
+impl RangeState {
+    /// Filter/rerank predictions by location scores for today's date.
+    fn apply(&self, predictions: Vec<birdnet_onnx::Prediction>) -> Vec<birdnet_onnx::Prediction> {
+        let now = chrono::Local::now();
+        let (month, day) = (now.month(), now.day());
+        let key = month * 100 + day;
+
+        let mut cache = match self.cache.lock() {
+            Ok(c) => c,
+            Err(p) => p.into_inner(),
+        };
+        if cache.0 != key {
+            match self.filter.predict(self.latitude, self.longitude, month, day) {
+                Ok(scores) => *cache = (key, scores),
+                Err(e) => {
+                    tracing::warn!("range filter predict failed: {e}");
+                    return predictions;
+                }
+            }
+        }
+        self.filter.filter_predictions(&predictions, &cache.1, self.rerank)
     }
 }
 

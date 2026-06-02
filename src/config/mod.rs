@@ -39,6 +39,26 @@ pub struct BirdNetSettings {
     pub longitude: f64,
     /// Label locale (Phase 1 ships `en_us`).
     pub locale: String,
+    /// eBird taxonomy codes JSON (scientific_common → 6-letter code). If the
+    /// file is absent, detections are stored without a species code.
+    pub taxonomy_path: PathBuf,
+    /// Location/date range filter (BirdNET meta model).
+    pub range_filter: RangeFilterSettings,
+}
+
+/// Range/geo filter: drops (or down-ranks) species implausible at the
+/// configured location and current date, using BirdNET's meta model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RangeFilterSettings {
+    /// Enable the filter (also requires a model and non-zero lat/lon).
+    pub enabled: bool,
+    /// Path to the converted meta/range ONNX model.
+    pub model_path: PathBuf,
+    /// Minimum location score to keep a species.
+    pub threshold: f32,
+    /// Multiply detection confidence by the species' location score.
+    pub rerank: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -62,6 +82,17 @@ pub struct ExportSettings {
     pub enabled: bool,
     /// Directory where clips are written.
     pub path: PathBuf,
+    /// Automatic clip cleanup policy.
+    pub retention: RetentionSettings,
+}
+
+/// Disk retention: periodically delete clip files older than `max_age_days`
+/// (the detection record is kept; its clip reference is cleared).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RetentionSettings {
+    pub enabled: bool,
+    pub max_age_days: u32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -92,7 +123,26 @@ impl Default for BirdNetSettings {
             latitude: 0.0,
             longitude: 0.0,
             locale: "en_us".to_string(),
+            taxonomy_path: PathBuf::from("models/eBird_taxonomy_codes_2021E.json"),
+            range_filter: RangeFilterSettings::default(),
         }
+    }
+}
+
+impl Default for RangeFilterSettings {
+    fn default() -> Self {
+        RangeFilterSettings {
+            enabled: false,
+            model_path: PathBuf::from("models/BirdNET_GLOBAL_6K_V2.4_RangeModel.onnx"),
+            threshold: 0.01,
+            rerank: false,
+        }
+    }
+}
+
+impl Default for RetentionSettings {
+    fn default() -> Self {
+        RetentionSettings { enabled: false, max_age_days: 30 }
     }
 }
 
@@ -104,7 +154,11 @@ impl Default for AudioSettings {
 
 impl Default for ExportSettings {
     fn default() -> Self {
-        ExportSettings { enabled: true, path: PathBuf::from("clips") }
+        ExportSettings {
+            enabled: true,
+            path: PathBuf::from("clips"),
+            retention: RetentionSettings::default(),
+        }
     }
 }
 

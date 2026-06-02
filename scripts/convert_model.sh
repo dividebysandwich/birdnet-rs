@@ -128,7 +128,10 @@ s = ort.InferenceSession(f, providers=["CPUExecutionProvider"])
 i, o = s.get_inputs()[0], s.get_outputs()[0]
 print(f"input : {i.name} {i.shape}")
 print(f"output: {o.name} {o.shape}")
-y = s.run([o.name], {i.name: np.zeros((1, 144000), dtype=np.float32)})[0]
+# Use the model's own input shape (symbolic dims like 'batch' → 1). Works for
+# both the classifier ([1,144000]) and the range/meta model ([1,3]).
+shape = [d if isinstance(d, int) else 1 for d in i.shape]
+y = s.run([o.name], {i.name: np.zeros(shape, dtype=np.float32)})[0]
 print(f"forward pass ok: {y.shape}")
 PY
 

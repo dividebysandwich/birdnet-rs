@@ -41,16 +41,22 @@ pub struct Processor {
     base_threshold: f32,
     dynamic: DynamicThresholds,
     fp: ConfirmationFilter,
+    taxonomy: Option<std::sync::Arc<crate::taxonomy::Taxonomy>>,
 }
 
 impl Processor {
-    pub fn new(net: BirdNet, settings: &Settings) -> Processor {
+    pub fn new(
+        net: BirdNet,
+        settings: &Settings,
+        taxonomy: Option<std::sync::Arc<crate::taxonomy::Taxonomy>>,
+    ) -> Processor {
         Processor {
             net,
             base_threshold: settings.birdnet.threshold,
             // Dynamic thresholds + a mild confirmation level are reasonable defaults.
             dynamic: DynamicThresholds::new(true, settings.birdnet.threshold),
             fp: ConfirmationFilter::new(1),
+            taxonomy,
         }
     }
 
@@ -78,11 +84,19 @@ impl Processor {
         }
         self.dynamic.record(&top.scientific_name, top.confidence, now_utc);
 
+        let species_code = self
+            .taxonomy
+            .as_ref()
+            .and_then(|t| t.code(&top.scientific_name, &top.common_name))
+            .unwrap_or_default()
+            .to_string();
+
         out.push(Detection {
             id: None,
             timestamp: now,
             scientific_name: top.scientific_name.clone(),
             common_name: top.common_name.clone(),
+            species_code,
             confidence: top.confidence,
             source: window.source.clone(),
             clip_name: None,

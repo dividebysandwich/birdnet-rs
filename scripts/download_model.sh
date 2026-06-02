@@ -23,10 +23,13 @@ OUT="models"
 REF="main"
 FORCE=0
 CONVERT=0
+RANGE=0
 
 REPO_RAW="https://raw.githubusercontent.com/tphakala/birdnet-go"
 DATA_DIR="internal/classifier/data"
 MODEL_FILE="BirdNET_GLOBAL_6K_V2.4_Model_FP32.tflite"
+RANGE_FILE="BirdNET_GLOBAL_6K_V2.4_MData_Model_FP16.tflite"
+TAXONOMY_FILE="eBird_taxonomy_codes_2021E.json"
 
 # Locales available in birdnet-go's V2.4 label set.
 LOCALES="af ar bg ca cs da de el en_uk en_us es et_ee fi fr he hi_in hr hu id \
@@ -41,6 +44,7 @@ while [[ $# -gt 0 ]]; do
     --ref)    REF="${2:?missing ref}"; shift 2 ;;
     --force)  FORCE=1; shift ;;
     --convert) CONVERT=1; shift ;;
+    --range)  RANGE=1; shift ;;
     -h|--help) usage 0 ;;
     *) echo "unknown option: $1" >&2; usage 1 ;;
   esac
@@ -83,6 +87,14 @@ get() {
 get "$MODEL_URL"  "$OUT/$MODEL_FILE"
 get "$LABELS_URL" "$OUT/$LABELS_FILE"
 
+# eBird taxonomy (small) — enables species codes out of the box.
+get "${REPO_RAW}/${REF}/${DATA_DIR}/${TAXONOMY_FILE}" "$OUT/$TAXONOMY_FILE"
+
+# Range/meta model (optional) for location/date filtering.
+if [[ $RANGE -eq 1 ]]; then
+  get "${REPO_RAW}/${REF}/${DATA_DIR}/${RANGE_FILE}" "$OUT/$RANGE_FILE"
+fi
+
 # Sanity checks.
 model_bytes=$(wc -c < "$OUT/$MODEL_FILE")
 label_lines=$(wc -l < "$OUT/$LABELS_FILE")
@@ -93,21 +105,30 @@ if [[ "$model_bytes" -lt 1000000 ]]; then
   echo "WARNING: model file looks too small — download may have failed." >&2
 fi
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ $CONVERT -eq 1 ]]; then
   echo
-  echo "converting to ONNX ..."
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  echo "converting classifier to ONNX ..."
   bash "$script_dir/convert_model.sh" \
     --tflite "$OUT/$MODEL_FILE" \
     --out "$OUT/BirdNET_GLOBAL_6K_V2.4.onnx"
+  if [[ $RANGE -eq 1 ]]; then
+    echo "converting range model to ONNX ..."
+    bash "$script_dir/convert_model.sh" \
+      --tflite "$OUT/$RANGE_FILE" \
+      --out "$OUT/BirdNET_GLOBAL_6K_V2.4_RangeModel.onnx"
+  fi
 else
   echo
-  echo "next: convert the TFLite model to ONNX with"
+  echo "next: convert the TFLite model(s) to ONNX with"
   echo "  scripts/convert_model.sh --tflite $OUT/$MODEL_FILE --out $OUT/BirdNET_GLOBAL_6K_V2.4.onnx"
+  [[ $RANGE -eq 1 ]] && echo "  scripts/convert_model.sh --tflite $OUT/$RANGE_FILE --out $OUT/BirdNET_GLOBAL_6K_V2.4_RangeModel.onnx"
 fi
 
 echo
 echo "then set in config.yaml:"
-echo "  birdnet.model_path:  $OUT/BirdNET_GLOBAL_6K_V2.4.onnx"
-echo "  birdnet.labels_path: $OUT/$LABELS_FILE"
-echo "  birdnet.locale:      $LOCALE"
+echo "  birdnet.model_path:    $OUT/BirdNET_GLOBAL_6K_V2.4.onnx"
+echo "  birdnet.labels_path:   $OUT/$LABELS_FILE"
+echo "  birdnet.locale:        $LOCALE"
+echo "  birdnet.taxonomy_path: $OUT/$TAXONOMY_FILE"
+[[ $RANGE -eq 1 ]] && echo "  birdnet.range_filter.enabled: true  (+ set latitude/longitude)"

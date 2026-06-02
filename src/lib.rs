@@ -28,6 +28,8 @@ pub mod server;
 pub mod spectrogram;
 #[cfg(feature = "ssr")]
 pub mod store;
+#[cfg(feature = "ssr")]
+pub mod taxonomy;
 
 /// A finished detection ready to be acted upon (stored, clipped, broadcast).
 ///
@@ -43,6 +45,8 @@ pub struct Detection {
     pub scientific_name: String,
     /// Top species common name.
     pub common_name: String,
+    /// eBird species code (empty if no taxonomy loaded / no match).
+    pub species_code: String,
     /// Confidence of the top species in `[0, 1]`.
     pub confidence: f32,
     /// Capture source identifier (device name).

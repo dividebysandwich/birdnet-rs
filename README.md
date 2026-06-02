@@ -139,16 +139,35 @@ birdnet:
   threshold: 0.3       # minimum confidence to report
   overlap: 0.0         # seconds of overlap between 3 s windows (1.5 = 50%)
   locale: en_us
+  latitude: 0.0
+  longitude: 0.0
+  taxonomy_path: models/eBird_taxonomy_codes_2021E.json   # species codes
+  range_filter:        # location/date plausibility filter (BirdNET meta model)
+    enabled: false     # also needs the range model + non-zero lat/lon
+    model_path: models/BirdNET_GLOBAL_6K_V2.4_RangeModel.onnx
+    threshold: 0.01
+    rerank: false      # true → multiply confidence by location score
 realtime:
   audio:
     source: default    # device name, or "default"
     export:
       enabled: true
       path: clips
+      retention:       # automatic clip cleanup
+        enabled: false
+        max_age_days: 30
 output:
   sqlite:
     path: birdnet.db
 ```
+
+To enable the **range filter** + species codes, fetch and convert the extras:
+
+```bash
+scripts/download_model.sh --range --convert   # adds taxonomy + range ONNX model
+```
+
+Then set `birdnet.latitude`/`longitude` and `birdnet.range_filter.enabled: true`.
 
 Env overrides: `BIRDNET_CONFIG`, `BIRDNET_THRESHOLD`, `BIRDNET_MODEL_PATH`,
 `BIRDNET_LABELS_PATH`, `BIRDNET_DB_PATH`.
@@ -178,10 +197,11 @@ BIRDNET_TEST_LABELS=models/BirdNET_GLOBAL_6K_V2.4_Labels_en_us.txt \
 ## Status / roadmap
 
 Implemented: soundcard capture, resampling, windowing, ONNX inference,
-confidence/dynamic/false-positive filtering, SQLite storage, clip export,
-clip + live spectrograms, a live audio monitor (VU meter + scrolling
-spectrogram), and a Leptos (WASM) web dashboard with live SSE updates.
+confidence/dynamic/false-positive filtering, **location/date range filter**,
+**eBird taxonomy (species codes)**, SQLite storage, clip export, **clip
+retention**, clip + live spectrograms, a live audio monitor (VU meter +
+scrolling spectrogram), and a Leptos (WASM) dashboard with live SSE updates,
+**detection search, and review (mark correct / false-positive)**.
 
-Planned: RTSP & multiple sources, Perch/Bat models, range/geo filtering, MQTT,
-BirdWeather, notifications, weather + image providers, auth/OIDC, disk
-retention, MySQL/Postgres.
+Planned: RTSP & multiple sources, Perch/Bat models, MQTT, BirdWeather,
+notifications, weather + image providers, auth/OIDC, MySQL/Postgres.

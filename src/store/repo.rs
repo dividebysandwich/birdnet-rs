@@ -1,17 +1,21 @@
-//! Repository helpers — the queries the pipeline and web API need.
+//! Repository helpers — the queries the pipeline, server functions, and the
+//! retention task need.
 
 use chrono::Utc;
 use sea_orm::ActiveValue::Set;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, ModelTrait, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, IntoActiveModel,
+    ModelTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
 };
 use serde::Serialize;
 
-use super::entities::{note, result};
+use super::entities::{note, note_review, result};
 use crate::Detection;
 
-/// A detection with its raw top-k results, as returned to the API.
+/// A detection paired with its review status (if any).
+pub type ReviewedNote = (note::Model, Option<note_review::Model>);
+
+/// A detection with its raw top-k results, as returned to the media routes.
 #[derive(Debug, Serialize)]
 pub struct DetectionRecord {
     #[serde(flatten)]
@@ -32,7 +36,7 @@ pub async fn save_detection(db: &DatabaseConnection, det: &Detection) -> anyhow:
         timestamp: Set(utc),
         scientific_name: Set(det.scientific_name.clone()),
         common_name: Set(det.common_name.clone()),
-        species_code: Set(String::new()),
+        species_code: Set(det.species_code.clone()),
         confidence: Set(det.confidence as f64),
         latitude: Set(0.0),
         longitude: Set(0.0),
@@ -57,16 +61,39 @@ pub async fn save_detection(db: &DatabaseConnection, det: &Detection) -> anyhow:
     Ok(note.id)
 }
 
-/// Most recent detections, newest first, paginated.
+/// Most recent detections (with review status), newest first, paginated.
 pub async fn recent(
     db: &DatabaseConnection,
     limit: u64,
     offset: u64,
-) -> anyhow::Result<Vec<note::Model>> {
+) -> anyhow::Result<Vec<ReviewedNote>> {
     let rows = note::Entity::find()
+        .find_also_related(note_review::Entity)
         .order_by_desc(note::Column::Timestamp)
-        .paginate(db, limit.max(1))
-        .fetch_page(offset / limit.max(1))
+        .limit(limit.max(1))
+        .offset(offset)
+        .all(db)
+        .await?;
+    Ok(rows)
+}
+
+/// Search detections by common name, scientific name, or species code substring.
+pub async fn search(
+    db: &DatabaseConnection,
+    query: &str,
+    limit: u64,
+) -> anyhow::Result<Vec<ReviewedNote>> {
+    let rows = note::Entity::find()
+        .find_also_related(note_review::Entity)
+        .filter(
+            Condition::any()
+                .add(note::Column::CommonName.contains(query))
+                .add(note::Column::ScientificName.contains(query))
+                .add(note::Column::SpeciesCode.contains(query)),
+        )
+        .order_by_desc(note::Column::Timestamp)
+        .limit(limit.max(1))
+        .all(db)
         .await?;
     Ok(rows)
 }
@@ -80,22 +107,55 @@ pub async fn get(db: &DatabaseConnection, id: i32) -> anyhow::Result<Option<Dete
     Ok(Some(DetectionRecord { note, results }))
 }
 
-/// Filter detections by species substring (case-insensitive on common name).
-pub async fn by_species(
-    db: &DatabaseConnection,
-    species: &str,
-    limit: u64,
-) -> anyhow::Result<Vec<note::Model>> {
-    let rows = note::Entity::find()
-        .filter(note::Column::CommonName.contains(species))
-        .order_by_desc(note::Column::Timestamp)
-        .limit(limit)
-        .all(db)
+/// Set (or replace) the human review status for a detection.
+pub async fn set_review(db: &DatabaseConnection, note_id: i32, verified: &str) -> anyhow::Result<()> {
+    let existing = note_review::Entity::find()
+        .filter(note_review::Column::NoteId.eq(note_id))
+        .one(db)
         .await?;
-    Ok(rows)
+    match existing {
+        Some(row) => {
+            let mut m = row.into_active_model();
+            m.verified = Set(verified.to_string());
+            m.update(db).await?;
+        }
+        None => {
+            note_review::ActiveModel {
+                note_id: Set(note_id),
+                verified: Set(verified.to_string()),
+                ..Default::default()
+            }
+            .insert(db)
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 /// Total number of stored detections.
 pub async fn count(db: &DatabaseConnection) -> anyhow::Result<u64> {
     Ok(note::Entity::find().count(db).await?)
+}
+
+/// `(id, clip_name)` for detections whose clip is older than `cutoff`.
+pub async fn clips_older_than(
+    db: &DatabaseConnection,
+    cutoff: chrono::DateTime<Utc>,
+) -> anyhow::Result<Vec<(i32, String)>> {
+    let rows = note::Entity::find()
+        .filter(note::Column::ClipName.is_not_null())
+        .filter(note::Column::Timestamp.lt(cutoff))
+        .all(db)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|n| n.clip_name.map(|c| (n.id, c)))
+        .collect())
+}
+
+/// Clear a detection's clip reference (after its file has been deleted).
+pub async fn clear_clip(db: &DatabaseConnection, id: i32) -> anyhow::Result<()> {
+    let m = note::ActiveModel { id: Set(id), clip_name: Set(None), ..Default::default() };
+    m.update(db).await?;
+    Ok(())
 }

@@ -1,6 +1,7 @@
 //! Server-only machinery: shared state, the SSE fan-out, the plain axum routes
 //! (live stream + media), and the realtime daemon startup.
 
+pub mod diskmanager;
 pub mod pipeline;
 pub mod routes;
 pub mod sse;
