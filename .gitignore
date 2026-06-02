@@ -1,5 +1,5 @@
 /target
-
+/images/*
 # Models are large and have their own licensing — convert/download locally.
 /models/*
 

@@ -122,32 +122,13 @@ pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<()> {
         );
     }
 
-    // Optional integrations (BirdWeather, MQTT, image provider).
+    // Optional integrations. MQTT + BirdWeather live in the shared, runtime-
+    // reconfigurable controller (built in `main`, applied from the settings
+    // page); the image provider is constructed here.
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(45))
         .build()
         .unwrap_or_default();
-
-    let birdweather = settings.birdweather.enabled.then(|| {
-        std::sync::Arc::new(super::birdweather::BirdWeather::new(
-            http.clone(),
-            &settings.birdweather,
-            settings.birdnet.latitude,
-            settings.birdnet.longitude,
-        ))
-    });
-
-    let mqtt = if settings.mqtt.enabled {
-        match super::mqtt::MqttClient::connect(&settings.mqtt) {
-            Ok(c) => Some(c),
-            Err(e) => {
-                tracing::warn!("mqtt disabled: {e}");
-                None
-            }
-        }
-    } else {
-        None
-    };
 
     let images = settings.imageprovider.enabled.then(|| {
         std::sync::Arc::new(super::imageprovider::ImageService::new(
@@ -164,8 +145,7 @@ pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<()> {
         settings.realtime.audio.export.clone(),
         state.sse.clone(),
     )
-    .with_birdweather(birdweather)
-    .with_mqtt(mqtt)
+    .with_integrations(state.integrations.clone())
     .with_images(images);
     tokio::spawn(async move {
         while let Some(det) = det_rx.recv().await {

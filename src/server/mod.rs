@@ -5,6 +5,7 @@ pub mod audio_control;
 pub mod birdweather;
 pub mod diskmanager;
 pub mod imageprovider;
+pub mod integrations;
 pub mod mqtt;
 pub mod pipeline;
 pub mod preferences;
@@ -19,6 +20,7 @@ use leptos::prelude::LeptosOptions;
 use sea_orm::DatabaseConnection;
 
 pub use audio_control::AudioController;
+pub use integrations::Integrations;
 pub use sse::{SseEvent, SseManager};
 
 /// Application state shared by `#[server]` functions (via Leptos context) and
@@ -33,6 +35,8 @@ pub struct AppState {
     pub image_cache_dir: PathBuf,
     /// Capture device controller — populated once the realtime pipeline starts.
     pub audio: Arc<OnceLock<AudioController>>,
+    /// Runtime-reconfigurable MQTT + BirdWeather integrations (settings page).
+    pub integrations: Arc<Integrations>,
 }
 
 /// The axum router state: Leptos needs [`LeptosOptions`], our routes need

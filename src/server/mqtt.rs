@@ -17,6 +17,8 @@ pub struct MqttClient {
     topic: String,
     qos: QoS,
     retain: bool,
+    /// Aborts the background event-loop task on [`shutdown`](Self::shutdown).
+    loop_task: tokio::task::AbortHandle,
 }
 
 fn qos_from(n: u8) -> QoS {
@@ -65,25 +67,20 @@ impl MqttClient {
         ));
 
         let (client, mut eventloop) = AsyncClient::new(opts, 16);
-        let mqtt = Arc::new(MqttClient {
-            client: client.clone(),
-            topic: cfg.topic.clone(),
-            qos: qos_from(cfg.qos),
-            retain: cfg.retain,
-        });
 
         let ha = cfg.home_assistant.clone();
         let topic = cfg.topic.clone();
-        tokio::spawn(async move {
+        let loop_client = client.clone();
+        let task = tokio::spawn(async move {
             loop {
                 match eventloop.poll().await {
                     Ok(Event::Incoming(Packet::ConnAck(_))) => {
                         tracing::info!("mqtt connected; publishing status to {status_topic}");
-                        let _ = client
+                        let _ = loop_client
                             .publish(&status_topic, QoS::AtLeastOnce, true, "online")
                             .await;
                         if ha.enabled {
-                            publish_ha_discovery(&client, &ha, &topic).await;
+                            publish_ha_discovery(&loop_client, &ha, &topic).await;
                         }
                     }
                     Ok(_) => {}
@@ -96,7 +93,19 @@ impl MqttClient {
         });
 
         tracing::info!("mqtt publishing detections to '{}'", cfg.topic);
-        Ok(mqtt)
+        Ok(Arc::new(MqttClient {
+            client,
+            topic: cfg.topic.clone(),
+            qos: qos_from(cfg.qos),
+            retain: cfg.retain,
+            loop_task: task.abort_handle(),
+        }))
+    }
+
+    /// Stop the background event loop (drops the connection; the broker then
+    /// publishes the retained `offline` LWT). Used when reconfiguring at runtime.
+    pub fn shutdown(&self) {
+        self.loop_task.abort();
     }
 
     /// Publish a detection (JSON) to the configured topic.

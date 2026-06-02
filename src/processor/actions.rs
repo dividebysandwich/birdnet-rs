@@ -14,9 +14,8 @@ use sea_orm::DatabaseConnection;
 use crate::Detection;
 use crate::app::DetectionDto;
 use crate::config::ExportSettings;
-use crate::server::birdweather::BirdWeather;
 use crate::server::imageprovider::ImageService;
-use crate::server::mqtt::MqttClient;
+use crate::server::integrations::Integrations;
 use crate::server::sse::SseManager;
 use crate::store::repo;
 
@@ -26,24 +25,18 @@ pub struct ActionDispatcher {
     db: DatabaseConnection,
     export: ExportSettings,
     sse: SseManager,
-    /// Optional integrations, present only when enabled in config.
-    birdweather: Option<Arc<BirdWeather>>,
-    mqtt: Option<Arc<MqttClient>>,
+    /// Runtime-reconfigurable MQTT + BirdWeather integrations.
+    integrations: Option<Arc<Integrations>>,
     images: Option<Arc<ImageService>>,
 }
 
 impl ActionDispatcher {
     pub fn new(db: DatabaseConnection, export: ExportSettings, sse: SseManager) -> ActionDispatcher {
-        ActionDispatcher { db, export, sse, birdweather: None, mqtt: None, images: None }
+        ActionDispatcher { db, export, sse, integrations: None, images: None }
     }
 
-    pub fn with_birdweather(mut self, bw: Option<Arc<BirdWeather>>) -> Self {
-        self.birdweather = bw;
-        self
-    }
-
-    pub fn with_mqtt(mut self, mqtt: Option<Arc<MqttClient>>) -> Self {
-        self.mqtt = mqtt;
+    pub fn with_integrations(mut self, integrations: Arc<Integrations>) -> Self {
+        self.integrations = Some(integrations);
         self
     }
 
@@ -74,16 +67,18 @@ impl ActionDispatcher {
         }
 
         // Fire-and-forget integrations so a slow network never blocks the loop.
-        if let Some(mqtt) = &self.mqtt
-            && let Ok(json) = serde_json::to_string(&DetectionDto::from_detection(&det))
-        {
-            let mqtt = mqtt.clone();
-            tokio::spawn(async move { mqtt.publish_detection(json).await });
-        }
-        if let Some(bw) = &self.birdweather {
-            let bw = bw.clone();
-            let det = det.clone();
-            tokio::spawn(async move { bw.upload(&det).await });
+        // The current MQTT/BirdWeather handles are read fresh each time so the
+        // settings page can reconfigure them at runtime.
+        if let Some(integrations) = &self.integrations {
+            if let Some(mqtt) = integrations.mqtt()
+                && let Ok(json) = serde_json::to_string(&DetectionDto::from_detection(&det))
+            {
+                tokio::spawn(async move { mqtt.publish_detection(json).await });
+            }
+            if let Some(bw) = integrations.birdweather() {
+                let det = det.clone();
+                tokio::spawn(async move { bw.upload(&det).await });
+            }
         }
         if let Some(images) = &self.images {
             let images = images.clone();

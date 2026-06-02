@@ -4,7 +4,7 @@
 
 use leptos::prelude::*;
 use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
-use leptos_router::components::{Route, Router, Routes};
+use leptos_router::components::{A, Route, Router, Routes};
 use leptos_router::StaticSegment;
 use serde::{Deserialize, Serialize};
 
@@ -68,6 +68,107 @@ impl DetectionDto {
             timestamp: d.timestamp.to_rfc3339(),
             verified: None,
             image_url: None,
+        }
+    }
+}
+
+/// MQTT integration settings as edited on the settings page. Mirrors
+/// [`crate::config::MqttSettings`] but lives here so it compiles for the WASM
+/// client too (the `config` module is `ssr`-only).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MqttConfig {
+    pub enabled: bool,
+    pub broker: String,
+    pub topic: String,
+    pub username: String,
+    pub password: String,
+    pub retain: bool,
+    pub qos: u8,
+    pub tls_insecure: bool,
+    pub ha_enabled: bool,
+    pub ha_discovery_prefix: String,
+    pub ha_device_name: String,
+}
+
+/// BirdWeather integration settings as edited on the settings page.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct BirdWeatherConfig {
+    pub enabled: bool,
+    pub id: String,
+    pub threshold: f32,
+    pub location_accuracy: f64,
+    pub endpoint: String,
+}
+
+/// Both integration sections, as exchanged with the settings page.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct IntegrationConfig {
+    pub mqtt: MqttConfig,
+    pub birdweather: BirdWeatherConfig,
+}
+
+#[cfg(feature = "ssr")]
+impl From<crate::config::MqttSettings> for MqttConfig {
+    fn from(s: crate::config::MqttSettings) -> MqttConfig {
+        MqttConfig {
+            enabled: s.enabled,
+            broker: s.broker,
+            topic: s.topic,
+            username: s.username,
+            password: s.password,
+            retain: s.retain,
+            qos: s.qos,
+            tls_insecure: s.tls_insecure,
+            ha_enabled: s.home_assistant.enabled,
+            ha_discovery_prefix: s.home_assistant.discovery_prefix,
+            ha_device_name: s.home_assistant.device_name,
+        }
+    }
+}
+
+#[cfg(feature = "ssr")]
+impl From<MqttConfig> for crate::config::MqttSettings {
+    fn from(c: MqttConfig) -> crate::config::MqttSettings {
+        crate::config::MqttSettings {
+            enabled: c.enabled,
+            broker: c.broker,
+            topic: c.topic,
+            username: c.username,
+            password: c.password,
+            retain: c.retain,
+            qos: c.qos,
+            tls_insecure: c.tls_insecure,
+            home_assistant: crate::config::HomeAssistantSettings {
+                enabled: c.ha_enabled,
+                discovery_prefix: c.ha_discovery_prefix,
+                device_name: c.ha_device_name,
+            },
+        }
+    }
+}
+
+#[cfg(feature = "ssr")]
+impl From<crate::config::BirdWeatherSettings> for BirdWeatherConfig {
+    fn from(s: crate::config::BirdWeatherSettings) -> BirdWeatherConfig {
+        BirdWeatherConfig {
+            enabled: s.enabled,
+            id: s.id,
+            threshold: s.threshold,
+            location_accuracy: s.location_accuracy,
+            endpoint: s.endpoint,
+        }
+    }
+}
+
+#[cfg(feature = "ssr")]
+impl From<BirdWeatherConfig> for crate::config::BirdWeatherSettings {
+    fn from(c: BirdWeatherConfig) -> crate::config::BirdWeatherSettings {
+        crate::config::BirdWeatherSettings {
+            enabled: c.enabled,
+            id: c.id,
+            threshold: c.threshold,
+            location_accuracy: c.location_accuracy,
+            endpoint: c.endpoint,
         }
     }
 }
@@ -309,6 +410,79 @@ pub async fn review_detection(id: i32, verified: String) -> Result<(), ServerFnE
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+/// Server function: the currently-active MQTT + BirdWeather settings.
+#[server(endpoint = "get_integration_config")]
+pub async fn get_integration_config() -> Result<IntegrationConfig, ServerFnError> {
+    let state = expect_context::<crate::server::AppState>();
+    Ok(IntegrationConfig {
+        mqtt: state.integrations.mqtt_config().into(),
+        birdweather: state.integrations.birdweather_config().into(),
+    })
+}
+
+/// Server function: persist MQTT + BirdWeather settings to the user-config
+/// directory and apply them to the running integrations (reconnect MQTT, rebuild
+/// the BirdWeather uploader) — no restart required.
+#[server(endpoint = "set_integration_config")]
+pub async fn set_integration_config(config: IntegrationConfig) -> Result<(), ServerFnError> {
+    use crate::config::{BirdWeatherSettings, MqttSettings};
+    use crate::server::{AppState, preferences};
+
+    let mqtt: MqttSettings = config.mqtt.into();
+    let birdweather: BirdWeatherSettings = config.birdweather.into();
+
+    // Light validation so an enabled-but-empty section can't silently no-op.
+    if mqtt.enabled && mqtt.broker.trim().is_empty() {
+        return Err(ServerFnError::new("MQTT is enabled but the broker URL is empty"));
+    }
+    if mqtt.enabled && mqtt.topic.trim().is_empty() {
+        return Err(ServerFnError::new("MQTT is enabled but the topic is empty"));
+    }
+    if mqtt.qos > 2 {
+        return Err(ServerFnError::new("MQTT QoS must be 0, 1, or 2"));
+    }
+    if birdweather.enabled && birdweather.id.trim().is_empty() {
+        return Err(ServerFnError::new("BirdWeather is enabled but the station ID is empty"));
+    }
+
+    preferences::save_integrations(&preferences::IntegrationPrefs {
+        mqtt: Some(mqtt.clone()),
+        birdweather: Some(birdweather.clone()),
+    })
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let state = expect_context::<AppState>();
+    state.integrations.apply_mqtt(&mqtt);
+    state.integrations.apply_birdweather(&birdweather);
+    Ok(())
+}
+
+/// Hamburger navigation, designed to sit inside a page `<header>`: a toggle
+/// button reveals a dropdown of page links. Clicking a link (or the button
+/// again) closes it.
+#[component]
+fn NavMenu() -> impl IntoView {
+    let open = RwSignal::new(false);
+    let close = move |_| open.set(false);
+    view! {
+        <nav class="navmenu">
+            <button
+                class="hamburger"
+                class:active=move || open.get()
+                aria-label="Menu"
+                aria-expanded=move || open.get().to_string()
+                on:click=move |_| open.update(|o| *o = !*o)
+            >
+                "☰"
+            </button>
+            <div class="nav-links" class:open=move || open.get()>
+                <A href="/" on:click=close>"Dashboard"</A>
+                <A href="/settings" on:click=close>"Settings"</A>
+            </div>
+        </nav>
+    }
+}
+
 /// Document shell (server-rendered HTML wrapper around the app).
 pub fn shell(options: LeptosOptions) -> impl IntoView {
     view! {
@@ -337,6 +511,7 @@ pub fn App() -> impl IntoView {
         <Router>
             <Routes fallback=|| "Not found.".into_view()>
                 <Route path=StaticSegment("") view=Dashboard />
+                <Route path=StaticSegment("settings") view=SettingsPage />
             </Routes>
         </Router>
     }
@@ -406,6 +581,7 @@ fn Dashboard() -> impl IntoView {
 
     view! {
         <header>
+            <NavMenu />
             <h1>"BirdNET-RS"</h1>
             <span class="sub">"realtime soundscape detections"</span>
             <span id="status" class:live=move || ui.connected.get()>
@@ -663,6 +839,222 @@ fn db_pct(amp: f32) -> f32 {
     }
     let db = 20.0 * amp.log10();
     (((db + 60.0) / 60.0) * 100.0).clamp(0.0, 100.0)
+}
+
+/// Configuration page: edit + apply the MQTT and BirdWeather integration
+/// settings. Loads the active config from the server, and on save persists it
+/// to the user-config directory and applies it live (no restart).
+#[component]
+fn SettingsPage() -> impl IntoView {
+    let cfg = Resource::new(
+        || (),
+        |_| async move { get_integration_config().await.unwrap_or_default() },
+    );
+    let status = RwSignal::new(String::new());
+    let saving = RwSignal::new(false);
+
+    // MQTT form fields.
+    let m_enabled = RwSignal::new(false);
+    let m_broker = RwSignal::new(String::new());
+    let m_topic = RwSignal::new(String::new());
+    let m_user = RwSignal::new(String::new());
+    let m_pass = RwSignal::new(String::new());
+    let m_retain = RwSignal::new(false);
+    let m_qos = RwSignal::new("1".to_string());
+    let m_tls_insecure = RwSignal::new(false);
+    let m_ha = RwSignal::new(false);
+    let m_ha_prefix = RwSignal::new(String::new());
+    let m_ha_device = RwSignal::new(String::new());
+    // BirdWeather form fields.
+    let b_enabled = RwSignal::new(false);
+    let b_id = RwSignal::new(String::new());
+    let b_threshold = RwSignal::new(String::new());
+    let b_accuracy = RwSignal::new(String::new());
+    let b_endpoint = RwSignal::new(String::new());
+
+    // Populate the form once the active config loads (client-side).
+    Effect::new(move |_| {
+        if let Some(c) = cfg.get() {
+            m_enabled.set(c.mqtt.enabled);
+            m_broker.set(c.mqtt.broker);
+            m_topic.set(c.mqtt.topic);
+            m_user.set(c.mqtt.username);
+            m_pass.set(c.mqtt.password);
+            m_retain.set(c.mqtt.retain);
+            m_qos.set(c.mqtt.qos.to_string());
+            m_tls_insecure.set(c.mqtt.tls_insecure);
+            m_ha.set(c.mqtt.ha_enabled);
+            m_ha_prefix.set(c.mqtt.ha_discovery_prefix);
+            m_ha_device.set(c.mqtt.ha_device_name);
+            b_enabled.set(c.birdweather.enabled);
+            b_id.set(c.birdweather.id);
+            b_threshold.set(c.birdweather.threshold.to_string());
+            b_accuracy.set(c.birdweather.location_accuracy.to_string());
+            b_endpoint.set(c.birdweather.endpoint);
+        }
+    });
+
+    let on_save = move |_| {
+        let config = IntegrationConfig {
+            mqtt: MqttConfig {
+                enabled: m_enabled.get(),
+                broker: m_broker.get(),
+                topic: m_topic.get(),
+                username: m_user.get(),
+                password: m_pass.get(),
+                retain: m_retain.get(),
+                qos: m_qos.get().parse().unwrap_or(1),
+                tls_insecure: m_tls_insecure.get(),
+                ha_enabled: m_ha.get(),
+                ha_discovery_prefix: m_ha_prefix.get(),
+                ha_device_name: m_ha_device.get(),
+            },
+            birdweather: BirdWeatherConfig {
+                enabled: b_enabled.get(),
+                id: b_id.get(),
+                threshold: b_threshold.get().parse().unwrap_or(0.7),
+                location_accuracy: b_accuracy.get().parse().unwrap_or(500.0),
+                endpoint: b_endpoint.get(),
+            },
+        };
+        saving.set(true);
+        status.set(String::new());
+        leptos::task::spawn_local(async move {
+            match set_integration_config(config).await {
+                Ok(()) => status.set("✓ Saved and applied.".to_string()),
+                Err(e) => status.set(format!("✗ {e}")),
+            }
+            saving.set(false);
+        });
+    };
+
+    view! {
+        <header>
+            <NavMenu />
+            <h1>"BirdNET-RS"</h1>
+            <span class="sub">"settings"</span>
+        </header>
+        <main>
+            <section class="panel">
+                <div class="panel-head"><h2>"MQTT"</h2></div>
+                <div class="settings-form">
+                    <label class="field check">
+                        <input type="checkbox" prop:checked=move || m_enabled.get()
+                            on:change=move |ev| m_enabled.set(event_target_checked(&ev)) />
+                        <span>"Enable MQTT publishing"</span>
+                    </label>
+                    <label class="field">
+                        <span>"Broker URL"</span>
+                        <input class="device" type="text" placeholder="mqtt://localhost:1883"
+                            prop:value=move || m_broker.get()
+                            on:input=move |ev| m_broker.set(event_target_value(&ev)) />
+                    </label>
+                    <label class="field">
+                        <span>"Topic"</span>
+                        <input class="device" type="text"
+                            prop:value=move || m_topic.get()
+                            on:input=move |ev| m_topic.set(event_target_value(&ev)) />
+                    </label>
+                    <label class="field">
+                        <span>"Username"</span>
+                        <input class="device" type="text"
+                            prop:value=move || m_user.get()
+                            on:input=move |ev| m_user.set(event_target_value(&ev)) />
+                    </label>
+                    <label class="field">
+                        <span>"Password"</span>
+                        <input class="device" type="password"
+                            prop:value=move || m_pass.get()
+                            on:input=move |ev| m_pass.set(event_target_value(&ev)) />
+                    </label>
+                    <label class="field">
+                        <span>"QoS"</span>
+                        <select class="device" prop:value=move || m_qos.get()
+                            on:change=move |ev| m_qos.set(event_target_value(&ev))>
+                            <option value="0">"0 — at most once"</option>
+                            <option value="1">"1 — at least once"</option>
+                            <option value="2">"2 — exactly once"</option>
+                        </select>
+                    </label>
+                    <label class="field check">
+                        <input type="checkbox" prop:checked=move || m_retain.get()
+                            on:change=move |ev| m_retain.set(event_target_checked(&ev)) />
+                        <span>"Retain messages"</span>
+                    </label>
+                    <label class="field check">
+                        <input type="checkbox" prop:checked=move || m_tls_insecure.get()
+                            on:change=move |ev| m_tls_insecure.set(event_target_checked(&ev)) />
+                        <span>"Skip TLS verification (mqtts:// self-signed)"</span>
+                    </label>
+                    <label class="field check">
+                        <input type="checkbox" prop:checked=move || m_ha.get()
+                            on:change=move |ev| m_ha.set(event_target_checked(&ev)) />
+                        <span>"Home Assistant discovery"</span>
+                    </label>
+                    <label class="field">
+                        <span>"HA discovery prefix"</span>
+                        <input class="device" type="text" placeholder="homeassistant"
+                            prop:value=move || m_ha_prefix.get()
+                            on:input=move |ev| m_ha_prefix.set(event_target_value(&ev)) />
+                    </label>
+                    <label class="field">
+                        <span>"HA device name"</span>
+                        <input class="device" type="text"
+                            prop:value=move || m_ha_device.get()
+                            on:input=move |ev| m_ha_device.set(event_target_value(&ev)) />
+                    </label>
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="panel-head"><h2>"BirdWeather"</h2></div>
+                <div class="settings-form">
+                    <label class="field check">
+                        <input type="checkbox" prop:checked=move || b_enabled.get()
+                            on:change=move |ev| b_enabled.set(event_target_checked(&ev)) />
+                        <span>"Enable BirdWeather upload"</span>
+                    </label>
+                    <label class="field">
+                        <span>"Station ID (token)"</span>
+                        <input class="device" type="text"
+                            prop:value=move || b_id.get()
+                            on:input=move |ev| b_id.set(event_target_value(&ev)) />
+                    </label>
+                    <label class="field">
+                        <span>"Min confidence"</span>
+                        <input class="device" type="number" min="0" max="1" step="0.05"
+                            prop:value=move || b_threshold.get()
+                            on:input=move |ev| b_threshold.set(event_target_value(&ev)) />
+                    </label>
+                    <label class="field">
+                        <span>"Location fuzz radius (m)"</span>
+                        <input class="device" type="number" min="0" step="50"
+                            prop:value=move || b_accuracy.get()
+                            on:input=move |ev| b_accuracy.set(event_target_value(&ev)) />
+                    </label>
+                    <label class="field">
+                        <span>"API endpoint"</span>
+                        <input class="device" type="text"
+                            prop:value=move || b_endpoint.get()
+                            on:input=move |ev| b_endpoint.set(event_target_value(&ev)) />
+                    </label>
+                    <p class="hint">
+                        "BirdWeather uploads require " <code>"ffmpeg"</code>
+                        " on PATH and a station location (set "
+                        <code>"birdnet.latitude"</code> "/" <code>"birdnet.longitude"</code>
+                        " in config.yaml)."
+                    </p>
+                </div>
+            </section>
+
+            <div class="settings-actions">
+                <button class="apply" disabled=move || saving.get() on:click=on_save>
+                    {move || if saving.get() { "Applying…" } else { "Apply settings" }}
+                </button>
+                <span class="save-status">{move || status.get()}</span>
+            </div>
+        </main>
+    }
 }
 
 // ---------------------------------------------------------------------------

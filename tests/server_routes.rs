@@ -59,6 +59,11 @@ async fn setup() -> (axum::Router, tempfile::TempDir) {
         export_path: export,
         image_cache_dir: dir.path().join("images"),
         audio: std::sync::Arc::new(std::sync::OnceLock::new()),
+        integrations: birdnet_rs::server::Integrations::new(
+            reqwest::Client::new(),
+            0.0,
+            0.0,
+        ),
     };
     let serve_state = ServeState {
         leptos_options: LeptosOptions::builder().output_name("birdnet-rs").build(),

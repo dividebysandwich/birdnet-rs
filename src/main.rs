@@ -27,7 +27,9 @@ async fn main() {
 
     use birdnet_rs::app::{App, shell};
     use birdnet_rs::config::Settings;
-    use birdnet_rs::server::{AppState, ServeState, SseManager, pipeline, routes};
+    use birdnet_rs::server::{
+        AppState, Integrations, ServeState, SseManager, pipeline, preferences, routes,
+    };
     use birdnet_rs::store;
 
     tracing_subscriber::fmt()
@@ -40,11 +42,22 @@ async fn main() {
     // Config + datastore.
     let config_path =
         std::env::var("BIRDNET_CONFIG").unwrap_or_else(|_| "config.yaml".to_string());
-    let settings = Settings::load(std::path::Path::new(&config_path))
+    let mut settings = Settings::load(std::path::Path::new(&config_path))
         .unwrap_or_else(|e| {
             eprintln!("config error: {e}");
             std::process::exit(1);
         });
+
+    // Integration settings saved from the web UI override the `config.yaml`
+    // sections (the settings page writes to the user-config directory).
+    let saved = preferences::load_integrations();
+    if let Some(mqtt) = saved.mqtt {
+        settings.mqtt = mqtt;
+    }
+    if let Some(birdweather) = saved.birdweather {
+        settings.birdweather = birdweather;
+    }
+
     let db = store::connect(&settings.output.sqlite.path)
         .await
         .unwrap_or_else(|e| {
@@ -52,12 +65,24 @@ async fn main() {
             std::process::exit(1);
         });
 
+    // Build the runtime-reconfigurable MQTT + BirdWeather controller and bring
+    // it up from the (merged) settings.
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(45))
+        .build()
+        .unwrap_or_default();
+    let integrations =
+        Integrations::new(http, settings.birdnet.latitude, settings.birdnet.longitude);
+    integrations.apply_mqtt(&settings.mqtt);
+    integrations.apply_birdweather(&settings.birdweather);
+
     let state = AppState {
         db,
         sse: SseManager::new(),
         export_path: settings.realtime.audio.export.path.clone(),
         image_cache_dir: settings.imageprovider.cache_dir.clone(),
         audio: std::sync::Arc::new(std::sync::OnceLock::new()),
+        integrations,
     };
 
     // Start the realtime pipeline. Non-fatal: if the model is unavailable we

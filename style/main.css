@@ -6,7 +6,8 @@ body {
 }
 header {
   padding: 1rem 1.5rem; background: #161a22; border-bottom: 1px solid #262b36;
-  display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+  position: relative;
 }
 header h1 { font-size: 1.25rem; margin: 0; }
 header .sub { color: #8b93a7; font-size: 0.85rem; }
@@ -94,6 +95,46 @@ td.review .verdict { margin-left: 4px; font-weight: 700; }
 .pager button:hover:not(:disabled) { border-color: #3a86ff; }
 .pager button:disabled { opacity: 0.4; cursor: default; }
 .page-info { color: #8b93a7; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+
+/* Hamburger menu — sits inside the header (title bar) */
+.navmenu { display: flex; align-items: center; }
+.hamburger {
+  background: #0c0e13; border: 1px solid #262b36; color: #e6e6e6; border-radius: 6px;
+  width: 36px; height: 32px; cursor: pointer; font-size: 1.05rem; line-height: 1;
+}
+.hamburger:hover, .hamburger.active { border-color: #3a86ff; }
+.nav-links {
+  display: none; flex-direction: column; gap: 0.15rem;
+  position: absolute; top: calc(100% + 4px); left: 1.5rem; z-index: 30;
+  min-width: 170px; padding: 0.35rem;
+  background: #161a22; border: 1px solid #262b36; border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+}
+.nav-links.open { display: flex; }
+.nav-links a {
+  color: #8b93a7; text-decoration: none; font-size: 0.85rem;
+  padding: 0.45rem 0.7rem; border-radius: 6px;
+}
+.nav-links a:hover { color: #e6e6e6; background: #1b1f29; }
+.nav-links a[aria-current="page"] { color: #e6e6e6; background: #1b1f29; }
+
+/* Settings form */
+.settings-form { display: flex; flex-direction: column; gap: 0.85rem; max-width: 520px; }
+.field { display: flex; flex-direction: column; gap: 0.3rem; }
+.field > span { color: #8b93a7; font-size: 0.8rem; }
+.field .device { max-width: none; width: 100%; }
+.field.check { flex-direction: row; align-items: center; gap: 0.5rem; }
+.field.check > span { color: #e6e6e6; font-size: 0.9rem; }
+.field.check input[type="checkbox"] { width: 16px; height: 16px; accent-color: #3a86ff; }
+.settings-form code, .hint code { background: #0c0e13; padding: 0.05rem 0.3rem; border-radius: 4px; font-size: 0.8em; }
+.settings-actions { display: flex; align-items: center; gap: 1rem; margin-top: 0.5rem; }
+.settings-actions .apply {
+  background: #1d3a5f; border: 1px solid #3a86ff; color: #e6e6e6; border-radius: 6px;
+  padding: 0.5rem 1rem; cursor: pointer; font-size: 0.9rem;
+}
+.settings-actions .apply:hover:not(:disabled) { background: #245090; }
+.settings-actions .apply:disabled { opacity: 0.5; cursor: default; }
+.save-status { font-size: 0.85rem; color: #8b93a7; }
 
 /* Mobile: stack the table into cards. */
 @media (max-width: 720px) {
