@@ -26,11 +26,6 @@ impl AudioController {
         self.device.lock().unwrap().clone()
     }
 
-    /// Available input device names.
-    pub fn devices(&self) -> Vec<String> {
-        audio::list_input_devices()
-    }
-
     /// Switch capture to `device`. Starts the new stream before stopping the old
     /// one, so a failure leaves the current device running.
     pub fn switch(&self, device: &str) -> anyhow::Result<()> {

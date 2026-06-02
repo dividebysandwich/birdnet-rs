@@ -87,10 +87,17 @@ pub struct LiveGuess {
     pub confidence: f32,
 }
 
-/// Available capture devices + the active one.
+/// One selectable input device: `id` is opened by the backend, `label` is shown.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AudioDevice {
+    pub id: String,
+    pub label: String,
+}
+
+/// Available capture devices + the active one (by id).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AudioDevices {
-    pub devices: Vec<String>,
+    pub devices: Vec<AudioDevice>,
     pub current: String,
 }
 
@@ -104,9 +111,13 @@ pub async fn list_audio_devices() -> Result<AudioDevices, ServerFnError> {
         return Ok(AudioDevices::default());
     };
     let current = ctrl.current();
-    let devices = tokio::task::spawn_blocking(crate::audio::list_input_devices)
+    let pairs = tokio::task::spawn_blocking(crate::audio::list_input_devices)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let devices = pairs
+        .into_iter()
+        .map(|(id, label)| AudioDevice { id, label })
+        .collect();
     Ok(AudioDevices { devices, current })
 }
 
@@ -267,8 +278,8 @@ fn Dashboard() -> impl IntoView {
                             });
                         }
                     >
-                        <For each=move || devices.get().devices key=|d| d.clone() let:d>
-                            <option value=d.clone()>{d.clone()}</option>
+                        <For each=move || devices.get().devices key=|d| d.id.clone() let:d>
+                            <option value=d.id>{d.label}</option>
                         </For>
                     </select>
                 </div>

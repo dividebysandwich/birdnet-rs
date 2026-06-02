@@ -375,6 +375,7 @@ dependencies = [
 name = "birdnet-rs"
 version = "0.1.0"
 dependencies = [
+ "alsa",
  "anyhow",
  "async-trait",
  "axum",

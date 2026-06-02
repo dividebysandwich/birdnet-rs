@@ -119,10 +119,13 @@ Then open <http://localhost:8080> (the address is the Leptos `site-addr`).
 - **Live audio monitor** — a VU meter (RMS + peak) and a scrolling spectrogram
   of the microphone input, fed by `audio` SSE events ~20×/s. This is the
   "is the mic working / what's the ambient soundscape" indicator.
-- **Input device selector** — pick the capture device from a dropdown; the
-  choice is applied live (no restart) and persisted to the OS user-config
+- **Input device selector** — pick the *actual* capture device from a dropdown;
+  the choice is applied live (no restart) and persisted to the OS user-config
   directory (`~/.config/birdnet-rs/preferences.json` on Linux, `%APPDATA%\…`
-  on Windows, `~/Library/Application Support/…` on macOS) so it's restored next launch.
+  on Windows, `~/Library/Application Support/…` on macOS) so it's restored next
+  launch. On Linux, capture uses ALSA directly so individual PipeWire/Pulse
+  sources (and hardware cards on plain-ALSA systems) are listed — not just the
+  high-level API plugins cpal exposes; macOS/Windows use cpal.
 - **Closest match** — the current best-guess species + match % shown in
   realtime as audio is analyzed (`live` SSE event), even when it's below the
   detection threshold.
