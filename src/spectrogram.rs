@@ -129,6 +129,12 @@ pub fn spectrum_bins(window: &[f32], n_bins: usize) -> Vec<f32> {
     }
     fft.process(&mut buf);
 
+    // Normalize by the window's coherent gain so bin magnitudes are on the same
+    // amplitude (dBFS) scale as the time-domain VU meter: a full-scale tone maps
+    // to ~0 dB rather than the raw FFT magnitude (which is inflated ~×N/4).
+    let wsum: f32 = hann[N_FFT - take..].iter().sum();
+    let gain = (wsum / 2.0).max(1e-6);
+
     // Log-spaced band edges across bins 1..MAX_BIN.
     let mut bins = Vec::with_capacity(n_bins);
     let lo = 1.0f32;
@@ -138,10 +144,11 @@ pub fn spectrum_bins(window: &[f32], n_bins: usize) -> Vec<f32> {
         let f1 = lo * (hi / lo).powf((b + 1) as f32 / n_bins as f32);
         let (a, z) = (f0.floor() as usize, (f1.ceil() as usize).max(f0.floor() as usize + 1));
         let z = z.min(MAX_BIN);
-        let mag = buf[a..z].iter().map(|c| c.norm()).fold(0.0f32, f32::max);
+        let mag = buf[a..z].iter().map(|c| c.norm()).fold(0.0f32, f32::max) / gain;
         let db = 20.0 * (mag + 1e-9).log10();
-        // Map a sensible audio range to [0, 1]; ambient noise stays visible.
-        bins.push(((db + 90.0) / 80.0).clamp(0.0, 1.0));
+        // -80..0 dBFS → [0,1]: aligned with the VU meter (loud tones bright,
+        // ambient noise dim but visible) instead of saturating.
+        bins.push(((db + 80.0) / 80.0).clamp(0.0, 1.0));
     }
     bins
 }
@@ -170,6 +177,23 @@ mod tests {
         let tone_sum: f32 = bins.iter().sum();
         let quiet_sum: f32 = quiet.iter().sum();
         assert!(tone_sum > quiet_sum);
+    }
+
+    #[test]
+    fn spectrum_is_not_saturated() {
+        let max_bin = |amp: f32| {
+            let s: Vec<f32> = (0..2048)
+                .map(|i| (2.0 * PI * 3000.0 * i as f32 / 48_000.0).sin() * amp)
+                .collect();
+            spectrum_bins(&s, 64).into_iter().fold(0.0f32, f32::max)
+        };
+        // A full-scale tone is bright (~1) and a quiet (-40 dB) tone is clearly
+        // dimmer — i.e. the scale isn't pinned at full brightness.
+        let loud = max_bin(1.0);
+        let quiet = max_bin(0.01);
+        assert!(loud > 0.9, "full-scale tone should be bright, got {loud}");
+        assert!(quiet < 0.75, "quiet tone should be dim, got {quiet}");
+        assert!(loud - quiet > 0.2, "loud and quiet should differ clearly");
     }
 
     #[test]
