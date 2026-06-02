@@ -804,7 +804,7 @@ fn detection_row(d: DetectionDto, reload: RwSignal<u32>) -> impl IntoView {
                 {format!("{pct}%")}
                 <div class="bar"><span style:width=move || format!("{pct}%")></span></div>
             </td>
-            <td data-label="Source">{d.source.clone()}</td>
+            <td class="src" data-label="Source" title=d.source.clone()>{d.source.clone()}</td>
             <td data-label="Spectrogram">
                 {has_clip.then(|| view! {
                     <img class="spectro-thumb" loading="lazy"
