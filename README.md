@@ -6,10 +6,7 @@ identifies bird species with the BirdNET neural network, filters false
 positives, stores detections, saves audio clips, and shows them live in a web
 dashboard.
 
-This is **Phase 1: a working core realtime pipeline**. It deliberately covers
-the critical path end-to-end and leaves larger surface area (RTSP, MQTT,
-BirdWeather, multi-model, auth, the full Svelte UI) for later phases. The module
-layout mirrors birdnet-go's Go packages so those slot in cleanly.
+<img width="1457" height="1339" alt="image_2026-06-02_19-34-49" src="https://github.com/user-attachments/assets/ff26da11-8764-4deb-9a45-1added507c52" />
 
 ## Pipeline
 
