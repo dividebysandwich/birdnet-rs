@@ -2,7 +2,10 @@
 //! (live stream + media), and the realtime daemon startup.
 
 pub mod audio_control;
+pub mod birdweather;
 pub mod diskmanager;
+pub mod imageprovider;
+pub mod mqtt;
 pub mod pipeline;
 pub mod preferences;
 pub mod routes;
@@ -26,6 +29,8 @@ pub struct AppState {
     pub sse: SseManager,
     /// Directory clips are written to / served from.
     pub export_path: PathBuf,
+    /// Directory cached species images are stored in / served from.
+    pub image_cache_dir: PathBuf,
     /// Capture device controller — populated once the realtime pipeline starts.
     pub audio: Arc<OnceLock<AudioController>>,
 }

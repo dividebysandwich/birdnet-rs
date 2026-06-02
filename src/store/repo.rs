@@ -9,7 +9,7 @@ use sea_orm::{
 };
 use serde::Serialize;
 
-use super::entities::{note, note_review, result};
+use super::entities::{image_cache, note, note_review, result};
 use crate::Detection;
 
 /// A detection paired with its review status (if any).
@@ -179,4 +179,62 @@ pub async fn clear_clip(db: &DatabaseConnection, id: i32) -> anyhow::Result<()> 
     let m = note::ActiveModel { id: Set(id), clip_name: Set(None), ..Default::default() };
     m.update(db).await?;
     Ok(())
+}
+
+/// The cached image entry for a species, if any.
+pub async fn image_get(
+    db: &DatabaseConnection,
+    scientific_name: &str,
+) -> anyhow::Result<Option<image_cache::Model>> {
+    Ok(image_cache::Entity::find()
+        .filter(image_cache::Column::ScientificName.eq(scientific_name))
+        .one(db)
+        .await?)
+}
+
+/// Insert or replace the cached image entry for a species.
+#[allow(clippy::too_many_arguments)]
+pub async fn image_upsert(
+    db: &DatabaseConnection,
+    scientific_name: &str,
+    provider: &str,
+    remote_url: &str,
+    local_path: Option<String>,
+    license_name: &str,
+    license_url: &str,
+    author_name: &str,
+) -> anyhow::Result<()> {
+    let existing = image_get(db, scientific_name).await?;
+    let mut m = match existing {
+        Some(row) => row.into_active_model(),
+        None => image_cache::ActiveModel {
+            scientific_name: Set(scientific_name.to_string()),
+            ..Default::default()
+        },
+    };
+    m.provider = Set(provider.to_string());
+    m.remote_url = Set(remote_url.to_string());
+    m.local_path = Set(local_path);
+    m.license_name = Set(license_name.to_string());
+    m.license_url = Set(license_url.to_string());
+    m.author_name = Set(author_name.to_string());
+    m.cached_at = Set(Utc::now());
+    m.save(db).await?;
+    Ok(())
+}
+
+/// Of the given scientific names, which have a cached local image file.
+pub async fn species_with_images(
+    db: &DatabaseConnection,
+    names: &[String],
+) -> anyhow::Result<std::collections::HashSet<String>> {
+    if names.is_empty() {
+        return Ok(std::collections::HashSet::new());
+    }
+    let rows = image_cache::Entity::find()
+        .filter(image_cache::Column::ScientificName.is_in(names.iter().map(String::as_str)))
+        .filter(image_cache::Column::LocalPath.is_not_null())
+        .all(db)
+        .await?;
+    Ok(rows.into_iter().map(|r| r.scientific_name).collect())
 }

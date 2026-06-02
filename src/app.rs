@@ -30,6 +30,8 @@ pub struct DetectionDto {
     pub timestamp: String,
     /// Review status, if reviewed: `"correct"` or `"false_positive"`.
     pub verified: Option<String>,
+    /// URL of the cached species image, if one is available.
+    pub image_url: Option<String>,
 }
 
 #[cfg(feature = "ssr")]
@@ -49,6 +51,7 @@ impl DetectionDto {
             time: n.time.clone(),
             timestamp: n.timestamp.to_rfc3339(),
             verified: review.map(|r| r.verified.clone()),
+            image_url: None, // filled in by query_detections after a batch lookup
         }
     }
 
@@ -64,6 +67,7 @@ impl DetectionDto {
             time: d.timestamp.format("%H:%M:%S").to_string(),
             timestamp: d.timestamp.to_rfc3339(),
             verified: None,
+            image_url: None,
         }
     }
 }
@@ -270,10 +274,23 @@ pub async fn query_detections(
     .await
     .map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    let items = rows
+    let mut items: Vec<DetectionDto> = rows
         .iter()
         .map(|(n, r)| DetectionDto::from_note(n, r.as_ref()))
         .collect();
+
+    // Attach image URLs for species that have a cached local image.
+    let names: Vec<String> = items.iter().map(|d| d.scientific_name.clone()).collect();
+    if let Ok(with_image) = repo::species_with_images(&state.db, &names).await {
+        for d in &mut items {
+            if with_image.contains(&d.scientific_name)
+                && let Some(id) = d.id
+            {
+                d.image_url = Some(format!("/media/image/{id}"));
+            }
+        }
+    }
+
     Ok(DetectionPage { items, total, page_size: PAGE_SIZE })
 }
 
@@ -533,7 +550,7 @@ fn Dashboard() -> impl IntoView {
                     <table>
                         <thead>
                             <tr>
-                                <th>"Time"</th><th>"Species"</th><th>"Confidence"</th>
+                                <th>"Time"</th><th>"Image"</th><th>"Species"</th><th>"Confidence"</th>
                                 <th>"Source"</th><th>"Spectrogram"</th><th>"Clip"</th><th>"Review"</th>
                             </tr>
                         </thead>
@@ -591,11 +608,18 @@ fn detection_row(d: DetectionDto, reload: RwSignal<u32>) -> impl IntoView {
     let has_clip = d.clip_name.is_some() && id.is_some();
     let is_correct = d.verified.as_deref() == Some("correct");
     let is_false = d.verified.as_deref() == Some("false_positive");
+    let image_url = d.image_url.clone();
     view! {
         <tr class="det-row flash"
             class:reviewed-correct=is_correct
             class:reviewed-false=is_false>
             <td data-label="Time">{d.time.clone()}</td>
+            <td data-label="Image">
+                {image_url.map(|url| view! {
+                    <img class="bird-thumb" loading="lazy" src=url
+                        alt=d.common_name.clone() title=d.common_name.clone() />
+                })}
+            </td>
             <td data-label="Species">
                 <div>{d.common_name.clone()}</div>
                 <div class="sci">{d.scientific_name.clone()}</div>
@@ -672,6 +696,13 @@ fn setup_live(ui: Ui) {
     });
     let _ = es.add_event_listener_with_callback("detection", det_cb.as_ref().unchecked_ref());
     det_cb.forget();
+
+    // A late-arriving species image (or similar) — refetch so it shows.
+    let refresh_cb = Closure::<dyn FnMut(MessageEvent)>::new(move |_e: MessageEvent| {
+        ui.reload.update(|n| *n = n.wrapping_add(1));
+    });
+    let _ = es.add_event_listener_with_callback("refresh", refresh_cb.as_ref().unchecked_ref());
+    refresh_cb.forget();
 
     let audio_cb = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
         if let Some(txt) = e.data().as_string()

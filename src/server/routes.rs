@@ -24,6 +24,39 @@ pub fn router() -> Router<ServeState> {
         .route("/stream", get(stream))
         .route("/media/clip/{id}", get(media_clip))
         .route("/media/spectrogram/{id}", get(media_spectrogram))
+        .route("/media/image/{id}", get(media_image))
+}
+
+/// `GET /media/image/{id}` — serve the cached species photo for a detection.
+async fn media_image(State(state): State<AppState>, Path(id): Path<i32>) -> Response {
+    let Ok(Some(record)) = repo::get(&state.db, id).await else {
+        return (StatusCode::NOT_FOUND, "detection not found").into_response();
+    };
+    let Ok(Some(img)) = repo::image_get(&state.db, &record.note.scientific_name).await else {
+        return (StatusCode::NOT_FOUND, "no image").into_response();
+    };
+    let Some(rel) = img.local_path else {
+        return (StatusCode::NOT_FOUND, "no image").into_response();
+    };
+    let path = state.image_cache_dir.join(&rel);
+    let content_type = match path.extension().and_then(|e| e.to_str()) {
+        Some("png") => "image/png",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        _ => "image/jpeg",
+    };
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, content_type),
+                (header::CACHE_CONTROL, "public, max-age=604800"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "image file missing").into_response(),
+    }
 }
 
 /// `GET /stream` — live feed (`detection` + `audio` events) as SSE.

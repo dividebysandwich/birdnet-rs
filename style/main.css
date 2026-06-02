@@ -64,6 +64,7 @@ th { color: #8b93a7; font-weight: 600; font-size: 0.75rem; text-transform: upper
 .bar { height: 6px; background: #262b36; border-radius: 3px; overflow: hidden; width: 80px; max-width: 100%; }
 .bar > span { display: block; height: 100%; background: #3a86ff; }
 .spectro-thumb { height: 44px; max-width: 130px; border-radius: 4px; background: #000; display: block; }
+.bird-thumb { height: 44px; width: 44px; object-fit: cover; border-radius: 6px; background: #0c0e13; display: block; }
 audio { height: 30px; max-width: 180px; width: 100%; }
 .empty { color: #5b6376; padding: 1rem 0.6rem; }
 

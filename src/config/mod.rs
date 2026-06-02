@@ -16,6 +16,61 @@ pub struct Settings {
     pub birdnet: BirdNetSettings,
     pub realtime: RealtimeSettings,
     pub output: OutputSettings,
+    pub mqtt: MqttSettings,
+    pub birdweather: BirdWeatherSettings,
+    pub imageprovider: ImageProviderSettings,
+}
+
+/// Publish each detection to an MQTT broker (+ optional Home Assistant discovery).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MqttSettings {
+    pub enabled: bool,
+    /// Broker URL, e.g. `mqtt://host:1883` or `mqtts://host:8883`.
+    pub broker: String,
+    pub topic: String,
+    pub username: String,
+    pub password: String,
+    pub retain: bool,
+    pub qos: u8,
+    /// Skip TLS certificate verification (only for `mqtts://` with self-signed certs).
+    pub tls_insecure: bool,
+    pub home_assistant: HomeAssistantSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HomeAssistantSettings {
+    pub enabled: bool,
+    pub discovery_prefix: String,
+    pub device_name: String,
+}
+
+/// Upload detections + soundscapes to a BirdWeather station.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BirdWeatherSettings {
+    pub enabled: bool,
+    /// BirdWeather station token ("BirdWeather ID").
+    pub id: String,
+    /// Minimum confidence to upload.
+    pub threshold: f32,
+    /// GPS coordinate fuzz radius in metres (privacy).
+    pub location_accuracy: f64,
+    pub endpoint: String,
+}
+
+/// Fetch + cache a representative species photo for the detection list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ImageProviderSettings {
+    pub enabled: bool,
+    /// Directory where downloaded images are cached.
+    pub cache_dir: PathBuf,
+    /// Re-fetch a cached image after this many days.
+    pub ttl_days: i64,
+    /// Wikimedia requires a descriptive User-Agent with contact info.
+    pub user_agent: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,6 +220,60 @@ impl Default for ExportSettings {
 impl Default for SqliteSettings {
     fn default() -> Self {
         SqliteSettings { path: PathBuf::from("birdnet.db") }
+    }
+}
+
+impl Default for MqttSettings {
+    fn default() -> Self {
+        MqttSettings {
+            enabled: false,
+            broker: "mqtt://localhost:1883".to_string(),
+            topic: "birdnet-rs/detections".to_string(),
+            username: String::new(),
+            password: String::new(),
+            retain: false,
+            qos: 1,
+            tls_insecure: false,
+            home_assistant: HomeAssistantSettings::default(),
+        }
+    }
+}
+
+impl Default for HomeAssistantSettings {
+    fn default() -> Self {
+        HomeAssistantSettings {
+            enabled: false,
+            discovery_prefix: "homeassistant".to_string(),
+            device_name: "BirdNET-RS".to_string(),
+        }
+    }
+}
+
+impl Default for BirdWeatherSettings {
+    fn default() -> Self {
+        BirdWeatherSettings {
+            enabled: false,
+            id: String::new(),
+            threshold: 0.7,
+            location_accuracy: 500.0,
+            endpoint: "https://app.birdweather.com/api/v1".to_string(),
+        }
+    }
+}
+
+impl Default for ImageProviderSettings {
+    fn default() -> Self {
+        ImageProviderSettings {
+            enabled: true,
+            cache_dir: PathBuf::from("images"),
+            ttl_days: 30,
+            user_agent: concat!(
+                "BirdNET-RS/",
+                env!("CARGO_PKG_VERSION"),
+                " (+https://github.com/dividebysandwich/birdnet-rs)"
+            )
+            .to_string(),
+        }
     }
 }
 

@@ -57,6 +57,7 @@ async fn setup() -> (axum::Router, tempfile::TempDir) {
         db,
         sse: SseManager::new(),
         export_path: export,
+        image_cache_dir: dir.path().join("images"),
         audio: std::sync::Arc::new(std::sync::OnceLock::new()),
     };
     let serve_state = ServeState {

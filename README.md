@@ -218,8 +218,41 @@ Implemented: soundcard capture, resampling, windowing, ONNX inference,
 confidence/dynamic/false-positive filtering, **location/date range filter**,
 **eBird taxonomy (species codes)**, SQLite storage, clip export, **clip
 retention**, clip + live spectrograms, a live audio monitor (VU meter +
-scrolling spectrogram), and a Leptos (WASM) dashboard with live SSE updates,
-**detection search, and review (mark correct / false-positive)**.
+scrolling spectrogram), a Leptos (WASM) dashboard with live SSE updates,
+**detection search, review (mark correct / false-positive)**, **MQTT publishing
+(+ Home Assistant discovery)**, **BirdWeather upload**, and a **species-image
+provider** (Wikipedia, cached) shown in the detection list.
 
-Planned: RTSP & multiple sources, Perch/Bat models, MQTT, BirdWeather,
-notifications, weather + image providers, auth/OIDC, MySQL/Postgres.
+Planned: RTSP & multiple sources, Perch/Bat models, notifications, weather,
+auth/OIDC, MySQL/Postgres.
+
+### Integrations
+
+Enable in `config.yaml` (all off by default except the image provider):
+
+```yaml
+mqtt:
+  enabled: false
+  broker: mqtt://localhost:1883     # mqtts:// for TLS
+  topic: birdnet-rs/detections
+  username: ""
+  password: ""
+  retain: false
+  qos: 1
+  home_assistant: { enabled: false, discovery_prefix: homeassistant, device_name: BirdNET-RS }
+birdweather:
+  enabled: false
+  id: ""                 # BirdWeather station token
+  threshold: 0.7
+  location_accuracy: 500 # GPS fuzz radius (m); also set birdnet.latitude/longitude
+imageprovider:
+  enabled: true
+  cache_dir: images
+  ttl_days: 30
+```
+
+**BirdWeather** encodes each soundscape to loudness-normalized FLAC via `ffmpeg`
+(EBU R128, −23 LUFS) — `ffmpeg` must be on `PATH`. **MQTT** publishes a JSON
+message per detection (+ an online/offline status and an HA discovery sensor).
+The **image provider** resolves species → a free Wikipedia thumbnail, caches it
+under `cache_dir`, and the dashboard shows it (served via `/media/image/{id}`).

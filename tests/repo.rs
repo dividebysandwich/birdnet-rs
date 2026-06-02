@@ -84,6 +84,37 @@ async fn query_filters_by_time_and_paginates() {
 }
 
 #[tokio::test]
+async fn image_cache_upsert_get_and_filter() {
+    let (db, _d) = db().await;
+    // No image yet.
+    assert!(repo::image_get(&db, "Cyanocitta cristata").await.unwrap().is_none());
+
+    // A species with a downloaded file, and one with only a negative entry.
+    repo::image_upsert(&db, "Cyanocitta cristata", "wikipedia", "http://x/jay.jpg",
+        Some("Cyanocitta_cristata.jpg".into()), "CC BY-SA", "http://lic", "Jane")
+        .await.unwrap();
+    repo::image_upsert(&db, "Corvus corax", "wikipedia", "", None, "", "", "")
+        .await.unwrap();
+
+    let row = repo::image_get(&db, "Cyanocitta cristata").await.unwrap().unwrap();
+    assert_eq!(row.local_path.as_deref(), Some("Cyanocitta_cristata.jpg"));
+    assert_eq!(row.author_name, "Jane");
+
+    // Upsert replaces (no duplicate row, updated fields).
+    repo::image_upsert(&db, "Cyanocitta cristata", "wikipedia", "http://x/jay2.jpg",
+        Some("new.jpg".into()), "CC0", "", "Bob").await.unwrap();
+    let row = repo::image_get(&db, "Cyanocitta cristata").await.unwrap().unwrap();
+    assert_eq!(row.local_path.as_deref(), Some("new.jpg"));
+    assert_eq!(row.author_name, "Bob");
+
+    // Only species with a local file are returned.
+    let names = vec!["Cyanocitta cristata".to_string(), "Corvus corax".to_string()];
+    let with = repo::species_with_images(&db, &names).await.unwrap();
+    assert!(with.contains("Cyanocitta cristata"));
+    assert!(!with.contains("Corvus corax")); // negative entry (no local_path)
+}
+
+#[tokio::test]
 async fn retention_finds_and_clears_old_clips() {
     let (db, _d) = db().await;
     let old = repo::save_detection(&db, &detection("Old", Some("old.wav"), 40)).await.unwrap();

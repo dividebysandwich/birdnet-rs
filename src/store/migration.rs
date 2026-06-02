@@ -9,7 +9,7 @@ pub struct Migrator;
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(M0001Init)]
+        vec![Box::new(M0001Init), Box::new(M0002ImageCache)]
     }
 }
 
@@ -46,6 +46,20 @@ enum NoteReviews {
     Id,
     NoteId,
     Verified,
+}
+
+#[derive(DeriveIden)]
+enum ImageCaches {
+    Table,
+    Id,
+    ScientificName,
+    Provider,
+    RemoteUrl,
+    LocalPath,
+    LicenseName,
+    LicenseUrl,
+    AuthorName,
+    CachedAt,
 }
 
 struct M0001Init;
@@ -137,6 +151,43 @@ impl MigrationTrait for M0001Init {
         manager.drop_table(Table::drop().table(NoteReviews::Table).to_owned()).await?;
         manager.drop_table(Table::drop().table(Results::Table).to_owned()).await?;
         manager.drop_table(Table::drop().table(Notes::Table).to_owned()).await?;
+        Ok(())
+    }
+}
+
+struct M0002ImageCache;
+
+impl MigrationName for M0002ImageCache {
+    fn name(&self) -> &str {
+        "m0002_image_cache"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for M0002ImageCache {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .create_table(
+                Table::create()
+                    .table(ImageCaches::Table)
+                    .if_not_exists()
+                    .col(pk_auto(ImageCaches::Id))
+                    .col(string_uniq(ImageCaches::ScientificName))
+                    .col(string(ImageCaches::Provider))
+                    .col(string(ImageCaches::RemoteUrl))
+                    .col(string_null(ImageCaches::LocalPath))
+                    .col(string(ImageCaches::LicenseName))
+                    .col(string(ImageCaches::LicenseUrl))
+                    .col(string(ImageCaches::AuthorName))
+                    .col(timestamp(ImageCaches::CachedAt))
+                    .to_owned(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager.drop_table(Table::drop().table(ImageCaches::Table).to_owned()).await?;
         Ok(())
     }
 }

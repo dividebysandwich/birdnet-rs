@@ -122,12 +122,51 @@ pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<()> {
         );
     }
 
-    // Actions: store + clip + broadcast.
+    // Optional integrations (BirdWeather, MQTT, image provider).
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(45))
+        .build()
+        .unwrap_or_default();
+
+    let birdweather = settings.birdweather.enabled.then(|| {
+        std::sync::Arc::new(super::birdweather::BirdWeather::new(
+            http.clone(),
+            &settings.birdweather,
+            settings.birdnet.latitude,
+            settings.birdnet.longitude,
+        ))
+    });
+
+    let mqtt = if settings.mqtt.enabled {
+        match super::mqtt::MqttClient::connect(&settings.mqtt) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                tracing::warn!("mqtt disabled: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let images = settings.imageprovider.enabled.then(|| {
+        std::sync::Arc::new(super::imageprovider::ImageService::new(
+            http.clone(),
+            state.db.clone(),
+            state.sse.clone(),
+            &settings.imageprovider,
+        ))
+    });
+
+    // Actions: store + clip + broadcast + integrations.
     let dispatcher = ActionDispatcher::new(
         state.db.clone(),
         settings.realtime.audio.export.clone(),
         state.sse.clone(),
-    );
+    )
+    .with_birdweather(birdweather)
+    .with_mqtt(mqtt)
+    .with_images(images);
     tokio::spawn(async move {
         while let Some(det) = det_rx.recv().await {
             dispatcher.dispatch(det).await;

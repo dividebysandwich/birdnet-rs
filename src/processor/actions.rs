@@ -7,12 +7,16 @@
 //! (so clients receive the assigned id).
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
 
 use crate::Detection;
 use crate::app::DetectionDto;
 use crate::config::ExportSettings;
+use crate::server::birdweather::BirdWeather;
+use crate::server::imageprovider::ImageService;
+use crate::server::mqtt::MqttClient;
 use crate::server::sse::SseManager;
 use crate::store::repo;
 
@@ -22,11 +26,30 @@ pub struct ActionDispatcher {
     db: DatabaseConnection,
     export: ExportSettings,
     sse: SseManager,
+    /// Optional integrations, present only when enabled in config.
+    birdweather: Option<Arc<BirdWeather>>,
+    mqtt: Option<Arc<MqttClient>>,
+    images: Option<Arc<ImageService>>,
 }
 
 impl ActionDispatcher {
     pub fn new(db: DatabaseConnection, export: ExportSettings, sse: SseManager) -> ActionDispatcher {
-        ActionDispatcher { db, export, sse }
+        ActionDispatcher { db, export, sse, birdweather: None, mqtt: None, images: None }
+    }
+
+    pub fn with_birdweather(mut self, bw: Option<Arc<BirdWeather>>) -> Self {
+        self.birdweather = bw;
+        self
+    }
+
+    pub fn with_mqtt(mut self, mqtt: Option<Arc<MqttClient>>) -> Self {
+        self.mqtt = mqtt;
+        self
+    }
+
+    pub fn with_images(mut self, images: Option<Arc<ImageService>>) -> Self {
+        self.images = images;
+        self
     }
 
     /// Run all actions for one detection.
@@ -48,6 +71,24 @@ impl ActionDispatcher {
         match serde_json::to_string(&DetectionDto::from_detection(&det)) {
             Ok(json) => self.sse.publish_detection(json),
             Err(e) => tracing::warn!("failed to serialize detection for SSE: {e}"),
+        }
+
+        // Fire-and-forget integrations so a slow network never blocks the loop.
+        if let Some(mqtt) = &self.mqtt
+            && let Ok(json) = serde_json::to_string(&DetectionDto::from_detection(&det))
+        {
+            let mqtt = mqtt.clone();
+            tokio::spawn(async move { mqtt.publish_detection(json).await });
+        }
+        if let Some(bw) = &self.birdweather {
+            let bw = bw.clone();
+            let det = det.clone();
+            tokio::spawn(async move { bw.upload(&det).await });
+        }
+        if let Some(images) = &self.images {
+            let images = images.clone();
+            let sci = det.scientific_name.clone();
+            tokio::spawn(async move { images.ensure(&sci).await });
         }
 
         tracing::info!(

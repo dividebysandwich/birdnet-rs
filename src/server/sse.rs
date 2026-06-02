@@ -43,6 +43,12 @@ impl SseManager {
         let _ = self.tx.send(SseEvent { event: "live", data: json });
     }
 
+    /// Ask connected dashboards to refetch the detections list (e.g. a late
+    /// image finished caching).
+    pub fn publish_refresh(&self) {
+        let _ = self.tx.send(SseEvent { event: "refresh", data: String::new() });
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<SseEvent> {
         self.tx.subscribe()
     }

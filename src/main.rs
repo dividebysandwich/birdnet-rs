@@ -56,6 +56,7 @@ async fn main() {
         db,
         sse: SseManager::new(),
         export_path: settings.realtime.audio.export.path.clone(),
+        image_cache_dir: settings.imageprovider.cache_dir.clone(),
         audio: std::sync::Arc::new(std::sync::OnceLock::new()),
     };
 
