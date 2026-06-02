@@ -12,6 +12,9 @@ pub struct Preferences {
     /// Selected capture device name (or `"default"`).
     #[serde(default)]
     pub audio_device: Option<String>,
+    /// Selected capture sample rate (Hz).
+    #[serde(default)]
+    pub audio_rate: Option<u32>,
 }
 
 /// `<config_dir>/birdnet-rs/preferences.json`, if a config dir exists.

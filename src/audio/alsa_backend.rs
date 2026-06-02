@@ -12,7 +12,7 @@ use alsa::{Direction, ValueOr};
 use tokio::sync::mpsc;
 
 use super::resample::Resampler48k;
-use super::{AudioFrame, CaptureHandle, downmix};
+use super::{AudioFrame, CaptureHandle, CaptureSession, downmix};
 
 /// Input devices as `(pcm_name, label)`. On PipeWire/Pulse systems this lists
 /// the real sources; on plain ALSA it lists hardware cards.
@@ -93,22 +93,25 @@ fn alsa_hardware() -> Vec<(String, String)> {
     res
 }
 
-/// Start capturing into `tx`. Capture continues until the [`CaptureHandle`] drops.
+/// Start capturing into `tx` at the device's nearest rate to `requested_rate`.
+/// Capture continues until the [`CaptureHandle`] drops.
 pub fn start_into(
     device: &str,
+    requested_rate: u32,
     tx: mpsc::UnboundedSender<AudioFrame>,
-) -> anyhow::Result<CaptureHandle> {
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<anyhow::Result<()>>();
+) -> anyhow::Result<CaptureSession> {
+    // (actual_rate, min_rate, max_rate)
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<anyhow::Result<(u32, u32, u32)>>();
     let name = device.to_string();
     let stop = Arc::new(AtomicBool::new(false));
     let stop_thread = stop.clone();
 
     let handle = std::thread::Builder::new()
         .name("birdnet-capture-alsa".into())
-        .spawn(move || match open_capture(&name) {
-            Ok((pcm, rate, channels)) => {
+        .spawn(move || match open_capture(&name, requested_rate) {
+            Ok((pcm, rate, channels, min, max)) => {
                 tracing::info!("capturing from '{name}': {rate} Hz, {channels} ch (ALSA)");
-                let _ = ready_tx.send(Ok(()));
+                let _ = ready_tx.send(Ok((rate, min, max)));
                 capture_loop(&pcm, rate, channels, &name, &tx, &stop_thread);
             }
             Err(e) => {
@@ -116,23 +119,35 @@ pub fn start_into(
             }
         })?;
 
-    ready_rx
+    let (actual_rate, min_rate, max_rate) = ready_rx
         .recv()
         .map_err(|_| anyhow::anyhow!("capture thread exited before start"))??;
 
-    Ok(CaptureHandle::from_parts(stop, handle))
+    Ok(CaptureSession {
+        handle: CaptureHandle::from_parts(stop, handle),
+        actual_rate,
+        min_rate,
+        max_rate,
+    })
 }
 
-/// Open `name` for capture, requesting 48 kHz S16; returns the negotiated rate
-/// and channel count.
-fn open_capture(name: &str) -> anyhow::Result<(PCM, u32, usize)> {
+/// Open `name` for capture at the nearest supported rate to `requested_rate`.
+/// Returns `(pcm, actual_rate, channels, min_rate, max_rate)`.
+fn open_capture(name: &str, requested_rate: u32) -> anyhow::Result<(PCM, u32, usize, u32, u32)> {
     let pcm = PCM::new(name, Direction::Capture, false)
         .map_err(|e| anyhow::anyhow!("opening input '{name}': {e}"))?;
+
+    // Read the supported rate range before constraining the params.
+    let (min_rate, max_rate) = {
+        let hwp = HwParams::any(&pcm)?;
+        (hwp.get_rate_min().unwrap_or(0), hwp.get_rate_max().unwrap_or(0))
+    };
+
     {
         let hwp = HwParams::any(&pcm)?;
         hwp.set_access(Access::RWInterleaved)?;
         hwp.set_format(Format::s16())?;
-        hwp.set_rate_near(48_000, ValueOr::Nearest)?;
+        hwp.set_rate_near(requested_rate, ValueOr::Nearest)?;
         let _ = hwp.set_channels_near(1); // prefer mono; downmix otherwise
         pcm.hw_params(&hwp)?;
     }
@@ -141,7 +156,7 @@ fn open_capture(name: &str) -> anyhow::Result<(PCM, u32, usize)> {
         (hwp.get_rate()?, (hwp.get_channels()? as usize).max(1))
     };
     pcm.prepare()?;
-    Ok((pcm, rate, channels))
+    Ok((pcm, rate, channels, min_rate, max_rate))
 }
 
 fn capture_loop(

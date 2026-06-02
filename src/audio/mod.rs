@@ -23,11 +23,26 @@ use tokio::sync::mpsc;
 
 pub use meter::{AudioLevel, AudioMeter};
 
+/// Common capture sample rates offered in the UI (filtered to what the device
+/// supports). The model runs at 48 kHz; higher rates are captured and
+/// downsampled (groundwork for ultrasonic/bat models).
+pub const STANDARD_RATES: &[u32] = &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 256_000];
+
 /// A block of 48 kHz mono PCM tagged with its capture source.
 #[derive(Debug, Clone)]
 pub struct AudioFrame {
     pub source: String,
     pub samples: Vec<f32>,
+}
+
+/// A started capture: the handle plus the device's negotiated/native rate info.
+pub struct CaptureSession {
+    pub handle: CaptureHandle,
+    /// Rate the device is actually capturing at (before downsampling to 48 kHz).
+    pub actual_rate: u32,
+    /// Device's supported rate range, used to filter the UI's rate options.
+    pub min_rate: u32,
+    pub max_rate: u32,
 }
 
 /// Keeps the capture thread alive; dropping it stops (and joins) capture.
@@ -65,24 +80,22 @@ pub fn list_input_devices() -> Vec<(String, String)> {
     }
 }
 
-/// Start capturing from `device` into an existing channel sender (used for hot
-/// device switching, where the downstream pipeline keeps the same receiver).
-pub fn start_into(device: &str, tx: mpsc::UnboundedSender<AudioFrame>) -> anyhow::Result<CaptureHandle> {
+/// Start capturing from `device` at `requested_rate` into an existing channel
+/// sender (used for hot device/rate switching, where the downstream pipeline
+/// keeps the same receiver). The device's nearest supported rate is used.
+pub fn start_into(
+    device: &str,
+    requested_rate: u32,
+    tx: mpsc::UnboundedSender<AudioFrame>,
+) -> anyhow::Result<CaptureSession> {
     #[cfg(target_os = "linux")]
     {
-        alsa_backend::start_into(device, tx)
+        alsa_backend::start_into(device, requested_rate, tx)
     }
     #[cfg(not(target_os = "linux"))]
     {
-        cpal_backend::start_into(device, tx)
+        cpal_backend::start_into(device, requested_rate, tx)
     }
-}
-
-/// Start capturing from `device`, returning a fresh receiver + handle.
-pub fn start(device: &str) -> anyhow::Result<(mpsc::UnboundedReceiver<AudioFrame>, CaptureHandle)> {
-    let (tx, rx) = mpsc::unbounded_channel();
-    let handle = start_into(device, tx)?;
-    Ok((rx, handle))
 }
 
 /// Average interleaved channels down to mono (shared by both backends).

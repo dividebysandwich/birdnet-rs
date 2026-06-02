@@ -94,16 +94,19 @@ pub struct AudioDevice {
     pub label: String,
 }
 
-/// Available capture devices + the active one (by id).
+/// Available capture devices + the active one (by id), its sample rate, and the
+/// rates that device supports.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AudioDevices {
     pub devices: Vec<AudioDevice>,
     pub current: String,
+    pub current_rate: u32,
+    pub rates: Vec<u32>,
 }
 
-/// Server function: list input devices and the active one.
-#[server(endpoint = "list_audio_devices")]
-pub async fn list_audio_devices() -> Result<AudioDevices, ServerFnError> {
+/// Build the device/rate snapshot from the running controller (server-side).
+#[cfg(feature = "ssr")]
+async fn audio_snapshot() -> Result<AudioDevices, ServerFnError> {
     use crate::server::AppState;
 
     let state = expect_context::<AppState>();
@@ -111,6 +114,8 @@ pub async fn list_audio_devices() -> Result<AudioDevices, ServerFnError> {
         return Ok(AudioDevices::default());
     };
     let current = ctrl.current();
+    let current_rate = ctrl.current_rate();
+    let rates = ctrl.supported_rates();
     let pairs = tokio::task::spawn_blocking(crate::audio::list_input_devices)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
@@ -118,31 +123,65 @@ pub async fn list_audio_devices() -> Result<AudioDevices, ServerFnError> {
         .into_iter()
         .map(|(id, label)| AudioDevice { id, label })
         .collect();
-    Ok(AudioDevices { devices, current })
+    Ok(AudioDevices { devices, current, current_rate, rates })
 }
 
-/// Server function: switch the capture device and persist the choice.
-#[server(endpoint = "set_audio_device")]
-pub async fn set_audio_device(name: String) -> Result<(), ServerFnError> {
+/// Apply a device/rate switch on the controller (off the async runtime).
+#[cfg(feature = "ssr")]
+async fn apply_switch(device: String, rate: u32) -> Result<(), ServerFnError> {
     use crate::server::{AppState, preferences};
 
     let state = expect_context::<AppState>();
-    if state.audio.get().is_none() {
-        return Err(ServerFnError::new("audio pipeline is not running"));
-    }
     let audio = state.audio.clone();
-    let device = name.clone();
+    let dev = device.clone();
     tokio::task::spawn_blocking(move || match audio.get() {
-        Some(ctrl) => ctrl.switch(&device),
+        Some(ctrl) => ctrl.switch(&dev, rate),
         None => Err(anyhow::anyhow!("audio pipeline is not running")),
     })
     .await
     .map_err(|e| ServerFnError::new(e.to_string()))?
     .map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    preferences::save(&preferences::Preferences { audio_device: Some(name) })
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    preferences::save(&preferences::Preferences {
+        audio_device: Some(device),
+        audio_rate: Some(rate),
+    })
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
     Ok(())
+}
+
+/// Server function: list input devices, the active one, and its rates.
+#[server(endpoint = "list_audio_devices")]
+pub async fn list_audio_devices() -> Result<AudioDevices, ServerFnError> {
+    audio_snapshot().await
+}
+
+/// Server function: switch the capture device (keeping the current rate).
+#[server(endpoint = "set_audio_device")]
+pub async fn set_audio_device(name: String) -> Result<AudioDevices, ServerFnError> {
+    let state = expect_context::<crate::server::AppState>();
+    let rate = state
+        .audio
+        .get()
+        .map(|c| c.current_rate())
+        .filter(|&r| r != 0)
+        .unwrap_or(48_000);
+    apply_switch(name, rate).await?;
+    audio_snapshot().await
+}
+
+/// Server function: switch the capture sample rate (keeping the current device).
+#[server(endpoint = "set_audio_rate")]
+pub async fn set_audio_rate(rate: u32) -> Result<AudioDevices, ServerFnError> {
+    let state = expect_context::<crate::server::AppState>();
+    let device = state
+        .audio
+        .get()
+        .map(|c| c.current())
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| "default".to_string());
+    apply_switch(device, rate).await?;
+    audio_snapshot().await
 }
 
 /// Server function: recent detections, newest first.
@@ -274,12 +313,32 @@ fn Dashboard() -> impl IntoView {
                         on:change=move |ev| {
                             let name = event_target_value(&ev);
                             leptos::task::spawn_local(async move {
-                                let _ = set_audio_device(name).await;
+                                if let Ok(d) = set_audio_device(name).await {
+                                    devices.set(d);
+                                }
                             });
                         }
                     >
                         <For each=move || devices.get().devices key=|d| d.id.clone() let:d>
                             <option value=d.id>{d.label}</option>
+                        </For>
+                    </select>
+                    <select
+                        class="device rate"
+                        title="Sample rate"
+                        prop:value=move || devices.get().current_rate.to_string()
+                        on:change=move |ev| {
+                            if let Ok(rate) = event_target_value(&ev).parse::<u32>() {
+                                leptos::task::spawn_local(async move {
+                                    if let Ok(d) = set_audio_rate(rate).await {
+                                        devices.set(d);
+                                    }
+                                });
+                            }
+                        }
+                    >
+                        <For each=move || devices.get().rates key=|r| *r let:r>
+                            <option value=r.to_string()>{format!("{} Hz", r)}</option>
                         </For>
                     </select>
                 </div>

@@ -98,12 +98,14 @@ pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<()> {
             }
         })?;
 
-    // Start capture via the controller, preferring the saved UI device.
+    // Start capture via the controller, preferring the saved UI device/rate.
     let controller = AudioController::new(audio_tx);
-    let initial_device = super::preferences::load()
+    let prefs = super::preferences::load();
+    let initial_device = prefs
         .audio_device
         .unwrap_or_else(|| settings.realtime.audio.source.clone());
-    if let Err(e) = controller.switch(&initial_device) {
+    let initial_rate = prefs.audio_rate.unwrap_or(crate::config::Settings::SAMPLE_RATE);
+    if let Err(e) = controller.switch(&initial_device, initial_rate) {
         tracing::warn!("could not start capture on '{initial_device}': {e}");
     }
     let _ = state.audio.set(controller);

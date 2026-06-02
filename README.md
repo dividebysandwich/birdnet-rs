@@ -126,6 +126,10 @@ Then open <http://localhost:8080> (the address is the Leptos `site-addr`).
   launch. On Linux, capture uses ALSA directly so individual PipeWire/Pulse
   sources (and hardware cards on plain-ALSA systems) are listed — not just the
   high-level API plugins cpal exposes; macOS/Windows use cpal.
+- **Sample-rate selector** — choose the capture rate (44.1 kHz … 256 kHz, filtered
+  to what the device reports); also persisted. The BirdNET v2.4 model runs at
+  48 kHz, so higher rates are captured and downsampled for inference (real
+  high-rate capture, groundwork for ultrasonic/bat models).
 - **Closest match** — the current best-guess species + match % shown in
   realtime as audio is analyzed (`live` SSE event), even when it's below the
   detection threshold.
