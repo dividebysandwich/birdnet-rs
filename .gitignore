@@ -1,0 +1,18 @@
+/target
+
+# Models are large and have their own licensing — convert/download locally.
+/models/*
+
+# Model conversion tooling checkout + venv
+/.cache/
+
+# cargo-leptos build artifacts (also under /target)
+/target/site/
+/target/front/
+
+# Runtime artifacts
+/clips/
+*.db
+*.db-shm
+*.db-wal
+config.yaml
