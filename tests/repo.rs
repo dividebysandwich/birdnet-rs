@@ -63,6 +63,27 @@ async fn search_matches_name_and_code() {
 }
 
 #[tokio::test]
+async fn query_filters_by_time_and_paginates() {
+    let (db, _d) = db().await;
+    // Ages 0..4 days old.
+    for i in 0..5 {
+        repo::save_detection(&db, &detection(&format!("Bird{i}"), None, i)).await.unwrap();
+    }
+
+    // Window: last ~2.5 days → 3 detections (ages 0, 1, 2).
+    let since = Utc::now() - Duration::days(2) - Duration::hours(12);
+    let (page0, total) = repo::query(&db, None, Some(since), None, 2, 0).await.unwrap();
+    assert_eq!(total, 3);
+    assert_eq!(page0.len(), 2, "first page of size 2");
+    let (page1, _) = repo::query(&db, None, Some(since), None, 2, 2).await.unwrap();
+    assert_eq!(page1.len(), 1, "second page has the remainder");
+
+    // Search narrows the total.
+    let (_, named) = repo::query(&db, Some("Bird0"), None, None, 50, 0).await.unwrap();
+    assert_eq!(named, 1);
+}
+
+#[tokio::test]
 async fn retention_finds_and_clears_old_clips() {
     let (db, _d) = db().await;
     let old = repo::save_detection(&db, &detection("Old", Some("old.wav"), 40)).await.unwrap();

@@ -67,35 +67,56 @@ pub async fn recent(
     limit: u64,
     offset: u64,
 ) -> anyhow::Result<Vec<ReviewedNote>> {
-    let rows = note::Entity::find()
-        .find_also_related(note_review::Entity)
-        .order_by_desc(note::Column::Timestamp)
-        .limit(limit.max(1))
-        .offset(offset)
-        .all(db)
-        .await?;
+    let (rows, _) = query(db, None, None, None, limit, offset).await?;
     Ok(rows)
 }
 
 /// Search detections by common name, scientific name, or species code substring.
 pub async fn search(
     db: &DatabaseConnection,
-    query: &str,
+    text: &str,
     limit: u64,
 ) -> anyhow::Result<Vec<ReviewedNote>> {
-    let rows = note::Entity::find()
-        .find_also_related(note_review::Entity)
-        .filter(
+    let (rows, _) = query(db, Some(text), None, None, limit, 0).await?;
+    Ok(rows)
+}
+
+/// Paginated query with optional text search and timestamp window. Returns the
+/// page of `(note, review)` rows plus the total matching count.
+pub async fn query(
+    db: &DatabaseConnection,
+    search: Option<&str>,
+    since: Option<chrono::DateTime<Utc>>,
+    until: Option<chrono::DateTime<Utc>>,
+    limit: u64,
+    offset: u64,
+) -> anyhow::Result<(Vec<ReviewedNote>, u64)> {
+    let mut cond = Condition::all();
+    if let Some(q) = search.filter(|s| !s.is_empty()) {
+        cond = cond.add(
             Condition::any()
-                .add(note::Column::CommonName.contains(query))
-                .add(note::Column::ScientificName.contains(query))
-                .add(note::Column::SpeciesCode.contains(query)),
-        )
+                .add(note::Column::CommonName.contains(q))
+                .add(note::Column::ScientificName.contains(q))
+                .add(note::Column::SpeciesCode.contains(q)),
+        );
+    }
+    if let Some(s) = since {
+        cond = cond.add(note::Column::Timestamp.gte(s));
+    }
+    if let Some(u) = until {
+        cond = cond.add(note::Column::Timestamp.lte(u));
+    }
+
+    let total = note::Entity::find().filter(cond.clone()).count(db).await?;
+    let rows = note::Entity::find()
+        .filter(cond)
+        .find_also_related(note_review::Entity)
         .order_by_desc(note::Column::Timestamp)
         .limit(limit.max(1))
+        .offset(offset)
         .all(db)
         .await?;
-    Ok(rows)
+    Ok((rows, total))
 }
 
 /// A single detection with its results, by id.

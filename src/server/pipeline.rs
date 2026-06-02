@@ -56,6 +56,7 @@ pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<()> {
     );
     let mut processor = Processor::new(net, settings, taxonomy);
     let sse = state.sse.clone();
+    let threshold = settings.birdnet.threshold;
 
     // Inference on a dedicated OS thread (blocking model calls off the runtime).
     std::thread::Builder::new()
@@ -81,6 +82,7 @@ pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<()> {
                                     common_name: top.common_name,
                                     scientific_name: top.scientific_name,
                                     confidence: top.confidence,
+                                    threshold,
                                 };
                                 if let Ok(json) = serde_json::to_string(&guess) {
                                     sse.publish_live(json);
