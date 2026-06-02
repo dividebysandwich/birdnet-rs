@@ -48,6 +48,7 @@ sea-orm = { version = "1.1", optional = true, features = ["sqlx-sqlite", "runtim
 sea-orm-migration = { version = "1.1", optional = true, features = ["sqlx-sqlite", "runtime-tokio-rustls"] }
 
 serde_yaml = { version = "0.9", optional = true }
+dirs = { version = "5", optional = true }
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter"] }
 anyhow = { version = "1", optional = true }
@@ -81,6 +82,7 @@ ssr = [
     "dep:sea-orm",
     "dep:sea-orm-migration",
     "dep:serde_yaml",
+    "dep:dirs",
     "dep:tracing",
     "dep:tracing-subscriber",
     "dep:anyhow",

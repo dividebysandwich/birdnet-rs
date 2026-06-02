@@ -1,21 +1,24 @@
 //! Realtime daemon startup: capture → resample → window → infer → filter →
-//! actions, all kicked off from the Leptos server's `main`. Returns the capture
-//! handle, which must be kept alive for capture to continue.
+//! actions, all kicked off from the Leptos server's `main`. The capture handle
+//! lives inside the [`AudioController`] stored in [`AppState`], so capture
+//! continues for the life of the process and the device can be switched at runtime.
 
 use std::collections::HashMap;
 
 use crate::analysis::WindowBuffer;
 use crate::analysis::overlap::hop_samples;
-use crate::audio::{self, AudioMeter, CaptureHandle};
+use crate::app::LiveGuess;
+use crate::audio::AudioMeter;
 use crate::config::Settings;
 use crate::inference::BirdNet;
 use crate::processor::Processor;
 use crate::processor::actions::ActionDispatcher;
 
-use super::AppState;
+use super::{AppState, AudioController};
 
-/// Load the model, start audio capture, and spawn the inference + action tasks.
-pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<CaptureHandle> {
+/// Load the model and start the realtime pipeline. The capture device is taken
+/// from the saved UI preference if set, otherwise from config.
+pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<()> {
     let mut net = BirdNet::load(&settings.birdnet.model_path, &settings.birdnet.labels_path)?;
 
     // Optional location/date range filter.
@@ -39,7 +42,10 @@ pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<CaptureHand
     // Optional eBird taxonomy (species codes).
     let taxonomy = load_taxonomy(&settings.birdnet.taxonomy_path);
 
-    let (audio_rx, capture) = audio::start(&settings.realtime.audio.source)?;
+    // Capture feeds this channel; the inference thread reads it. The sender lives
+    // in the AudioController so the device can be switched without disrupting it.
+    let (audio_tx, mut audio_rx) =
+        tokio::sync::mpsc::unbounded_channel::<crate::audio::AudioFrame>();
     let (det_tx, mut det_rx) = tokio::sync::mpsc::unbounded_channel();
 
     let window_samples = settings.window_samples();
@@ -49,8 +55,7 @@ pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<CaptureHand
         settings.birdnet.overlap,
     );
     let mut processor = Processor::new(net, settings, taxonomy);
-    let mut audio_rx = audio_rx;
-    let meter_sse = state.sse.clone();
+    let sse = state.sse.clone();
 
     // Inference on a dedicated OS thread (blocking model calls off the runtime).
     std::thread::Builder::new()
@@ -61,7 +66,7 @@ pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<CaptureHand
             while let Some(frame) = audio_rx.blocking_recv() {
                 for level in meter.push(&frame.samples) {
                     if let Ok(json) = serde_json::to_string(&level) {
-                        meter_sse.publish_audio(json);
+                        sse.publish_audio(json);
                     }
                 }
                 let buf = buffers.entry(frame.source.clone()).or_insert_with(|| {
@@ -69,8 +74,19 @@ pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<CaptureHand
                 });
                 for window in buf.push(&frame.samples) {
                     match processor.process(&window) {
-                        Ok(dets) => {
-                            for d in dets {
+                        Ok(output) => {
+                            // Broadcast the current best guess (even below threshold).
+                            if let Some(top) = output.top_guess {
+                                let guess = LiveGuess {
+                                    common_name: top.common_name,
+                                    scientific_name: top.scientific_name,
+                                    confidence: top.confidence,
+                                };
+                                if let Ok(json) = serde_json::to_string(&guess) {
+                                    sse.publish_live(json);
+                                }
+                            }
+                            for d in output.detections {
                                 if det_tx.send(d).is_err() {
                                     return;
                                 }
@@ -81,6 +97,16 @@ pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<CaptureHand
                 }
             }
         })?;
+
+    // Start capture via the controller, preferring the saved UI device.
+    let controller = AudioController::new(audio_tx);
+    let initial_device = super::preferences::load()
+        .audio_device
+        .unwrap_or_else(|| settings.realtime.audio.source.clone());
+    if let Err(e) = controller.switch(&initial_device) {
+        tracing::warn!("could not start capture on '{initial_device}': {e}");
+    }
+    let _ = state.audio.set(controller);
 
     // Clip retention (optional background cleanup).
     let retention = &settings.realtime.audio.export.retention;
@@ -104,7 +130,7 @@ pub fn start(settings: &Settings, state: AppState) -> anyhow::Result<CaptureHand
         }
     });
 
-    Ok(capture)
+    Ok(())
 }
 
 /// Load the eBird taxonomy if present; missing/invalid files are non-fatal.

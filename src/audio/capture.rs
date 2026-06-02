@@ -20,12 +20,38 @@ pub struct AudioFrame {
     pub samples: Vec<f32>,
 }
 
+/// List available input devices (`"default"` first, then named devices).
+pub fn list_input_devices() -> Vec<String> {
+    let host = cpal::default_host();
+    let mut out = vec!["default".to_string()];
+    if let Ok(devices) = host.input_devices() {
+        for d in devices {
+            if let Ok(name) = d.name()
+                && !out.contains(&name)
+            {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
+
 /// Start capturing from the named device (`"default"` for the system default).
 ///
 /// Returns a receiver of 48 kHz mono [`AudioFrame`]s. Capture continues until
 /// the returned [`CaptureHandle`] is dropped.
 pub fn start(device_name: &str) -> anyhow::Result<(mpsc::UnboundedReceiver<AudioFrame>, CaptureHandle)> {
     let (tx, rx) = mpsc::unbounded_channel();
+    let handle = start_into(device_name, tx)?;
+    Ok((rx, handle))
+}
+
+/// Start capturing into an existing channel sender (used for hot device
+/// switching, where the downstream pipeline keeps the same receiver).
+pub fn start_into(
+    device_name: &str,
+    tx: mpsc::UnboundedSender<AudioFrame>,
+) -> anyhow::Result<CaptureHandle> {
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<anyhow::Result<()>>();
     let device_name = device_name.to_string();
 
@@ -60,7 +86,7 @@ pub fn start(device_name: &str) -> anyhow::Result<(mpsc::UnboundedReceiver<Audio
         .recv()
         .map_err(|_| anyhow::anyhow!("capture thread exited before start"))??;
 
-    Ok((rx, CaptureHandle { stop, thread: Some(handle) }))
+    Ok(CaptureHandle { stop, thread: Some(handle) })
 }
 
 /// Keeps the capture thread alive; dropping it stops capture.

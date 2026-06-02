@@ -56,17 +56,14 @@ async fn main() {
         db,
         sse: SseManager::new(),
         export_path: settings.realtime.audio.export.path.clone(),
+        audio: std::sync::Arc::new(std::sync::OnceLock::new()),
     };
 
-    // Start the realtime pipeline. Non-fatal: if the model/mic is unavailable
-    // we still serve the dashboard (the audio monitor just stays idle).
-    let _capture = match pipeline::start(&settings, state.clone()) {
-        Ok(handle) => Some(handle),
-        Err(e) => {
-            tracing::warn!("realtime pipeline not started: {e} — serving UI only");
-            None
-        }
-    };
+    // Start the realtime pipeline. Non-fatal: if the model is unavailable we
+    // still serve the dashboard (the audio monitor / device selector just stay idle).
+    if let Err(e) = pipeline::start(&settings, state.clone()) {
+        tracing::warn!("realtime pipeline not started: {e} — serving UI only");
+    }
 
     // Leptos wiring.
     let conf = get_configuration(None).unwrap();

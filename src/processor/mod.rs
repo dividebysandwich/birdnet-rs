@@ -36,6 +36,14 @@ const EXCLUDED_COMMON_NAMES: &[&str] = &[
     "Siren",
 ];
 
+/// Result of processing one window.
+pub struct ProcessOutput {
+    /// Confirmed detections to act on (store/clip/broadcast).
+    pub detections: Vec<Detection>,
+    /// Current best-guess species for the live readout, if any (pre-threshold).
+    pub top_guess: Option<crate::inference::Prediction>,
+}
+
 pub struct Processor {
     net: BirdNet,
     base_threshold: f32,
@@ -60,50 +68,49 @@ impl Processor {
         }
     }
 
-    /// Process one window, returning any confirmed detections.
-    pub fn process(&mut self, window: &Window) -> anyhow::Result<Vec<Detection>> {
+    /// Process one window: returns any confirmed detections plus the current
+    /// best-guess species (the top non-excluded prediction, regardless of
+    /// threshold) for the live display.
+    pub fn process(&mut self, window: &Window) -> anyhow::Result<ProcessOutput> {
         let preds = self.net.predict(&window.samples)?;
         let now = chrono::Local::now();
         let now_utc = now.with_timezone(&Utc);
 
-        let mut out = Vec::new();
-        let Some(top) = preds.first() else {
-            return Ok(out);
-        };
+        // Best species candidate for the live readout (may be below threshold).
+        let top_guess = preds.iter().find(|p| !is_excluded(&p.common_name)).cloned();
 
-        if is_excluded(&top.common_name) {
-            return Ok(out);
+        let mut detections = Vec::new();
+        // Detection gating uses the actual top prediction (skip if it's noise),
+        // unchanged from before.
+        if let Some(top) = preds.first()
+            && !is_excluded(&top.common_name)
+        {
+            let threshold = self.dynamic.effective(&top.scientific_name, now_utc);
+            if top.confidence >= threshold && self.fp.confirm(&top.scientific_name, now_utc) {
+                self.dynamic.record(&top.scientific_name, top.confidence, now_utc);
+                let species_code = self
+                    .taxonomy
+                    .as_ref()
+                    .and_then(|t| t.code(&top.scientific_name, &top.common_name))
+                    .unwrap_or_default()
+                    .to_string();
+
+                detections.push(Detection {
+                    id: None,
+                    timestamp: now,
+                    scientific_name: top.scientific_name.clone(),
+                    common_name: top.common_name.clone(),
+                    species_code,
+                    confidence: top.confidence,
+                    source: window.source.clone(),
+                    clip_name: None,
+                    results: preds.clone(),
+                    pcm: window.samples.clone(),
+                });
+            }
         }
 
-        let threshold = self.dynamic.effective(&top.scientific_name, now_utc);
-        if top.confidence < threshold {
-            return Ok(out);
-        }
-        if !self.fp.confirm(&top.scientific_name, now_utc) {
-            return Ok(out);
-        }
-        self.dynamic.record(&top.scientific_name, top.confidence, now_utc);
-
-        let species_code = self
-            .taxonomy
-            .as_ref()
-            .and_then(|t| t.code(&top.scientific_name, &top.common_name))
-            .unwrap_or_default()
-            .to_string();
-
-        out.push(Detection {
-            id: None,
-            timestamp: now,
-            scientific_name: top.scientific_name.clone(),
-            common_name: top.common_name.clone(),
-            species_code,
-            confidence: top.confidence,
-            source: window.source.clone(),
-            clip_name: None,
-            results: preds,
-            pcm: window.samples.clone(),
-        });
-        Ok(out)
+        Ok(ProcessOutput { detections, top_guess })
     }
 
     pub fn base_threshold(&self) -> f32 {

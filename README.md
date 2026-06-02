@@ -119,9 +119,17 @@ Then open <http://localhost:8080> (the address is the Leptos `site-addr`).
 - **Live audio monitor** — a VU meter (RMS + peak) and a scrolling spectrogram
   of the microphone input, fed by `audio` SSE events ~20×/s. This is the
   "is the mic working / what's the ambient soundscape" indicator.
+- **Input device selector** — pick the capture device from a dropdown; the
+  choice is applied live (no restart) and persisted to the OS user-config
+  directory (`~/.config/birdnet-rs/preferences.json` on Linux, `%APPDATA%\…`
+  on Windows, `~/Library/Application Support/…` on macOS) so it's restored next launch.
+- **Closest match** — the current best-guess species + match % shown in
+  realtime as audio is analyzed (`live` SSE event), even when it's below the
+  detection threshold.
 - **Detections** — recent detections (loaded via the `list_detections` server
-  function, live-prepended via `detection` SSE), each with a rendered **clip
-  spectrogram** thumbnail and an audio player.
+  function, live-prepended via `detection` SSE), with **search** by name/code,
+  per-row **review** (✓ correct / ✗ false-positive), a rendered **clip
+  spectrogram** thumbnail, and an audio player.
 
 Detections are stored in `birdnet.db`; clips are written under `clips/<date>/`.
 
@@ -177,7 +185,10 @@ Env overrides: `BIRDNET_CONFIG`, `BIRDNET_THRESHOLD`, `BIRDNET_MODEL_PATH`,
 | Route | Description |
 |---|---|
 | `POST /api/list_detections` | `#[server]` function — recent detections (JSON) |
-| `GET /stream` | live SSE: `detection` + `audio` (RMS/peak/spectrum) events |
+| `POST /api/search_detections` | `#[server]` function — search by name / species code |
+| `POST /api/review_detection` | `#[server]` function — mark correct / false-positive |
+| `POST /api/list_audio_devices` / `set_audio_device` | `#[server]` functions — input device list / switch |
+| `GET /stream` | live SSE: `detection` + `audio` + `live` (best-guess) events |
 | `GET /media/clip/{id}` | the WAV clip |
 | `GET /media/spectrogram/{id}` | clip rendered as a spectrogram PNG |
 | `GET /` , `/pkg/*` | SSR dashboard + WASM/JS/CSS bundle |

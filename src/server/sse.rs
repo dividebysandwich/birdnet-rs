@@ -38,6 +38,11 @@ impl SseManager {
         let _ = self.tx.send(SseEvent { event: "audio", data: json });
     }
 
+    /// Publish a `live` event (the current best-guess species, pre-threshold).
+    pub fn publish_live(&self, json: String) {
+        let _ = self.tx.send(SseEvent { event: "live", data: json });
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<SseEvent> {
         self.tx.subscribe()
     }

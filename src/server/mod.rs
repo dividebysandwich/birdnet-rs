@@ -1,17 +1,21 @@
 //! Server-only machinery: shared state, the SSE fan-out, the plain axum routes
 //! (live stream + media), and the realtime daemon startup.
 
+pub mod audio_control;
 pub mod diskmanager;
 pub mod pipeline;
+pub mod preferences;
 pub mod routes;
 pub mod sse;
 
 use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 
 use axum::extract::FromRef;
 use leptos::prelude::LeptosOptions;
 use sea_orm::DatabaseConnection;
 
+pub use audio_control::AudioController;
 pub use sse::{SseEvent, SseManager};
 
 /// Application state shared by `#[server]` functions (via Leptos context) and
@@ -22,6 +26,8 @@ pub struct AppState {
     pub sse: SseManager,
     /// Directory clips are written to / served from.
     pub export_path: PathBuf,
+    /// Capture device controller — populated once the realtime pipeline starts.
+    pub audio: Arc<OnceLock<AudioController>>,
 }
 
 /// The axum router state: Leptos needs [`LeptosOptions`], our routes need

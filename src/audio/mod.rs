@@ -8,5 +8,5 @@ pub mod capture;
 pub mod meter;
 pub mod resample;
 
-pub use capture::{AudioFrame, CaptureHandle, start};
+pub use capture::{AudioFrame, CaptureHandle, list_input_devices, start, start_into};
 pub use meter::{AudioLevel, AudioMeter};

@@ -79,6 +79,61 @@ pub struct AudioLevel {
     pub spectrum: Vec<f32>,
 }
 
+/// Current best-guess species (from the `live` SSE event, pre-threshold).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LiveGuess {
+    pub common_name: String,
+    pub scientific_name: String,
+    pub confidence: f32,
+}
+
+/// Available capture devices + the active one.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AudioDevices {
+    pub devices: Vec<String>,
+    pub current: String,
+}
+
+/// Server function: list input devices and the active one.
+#[server(endpoint = "list_audio_devices")]
+pub async fn list_audio_devices() -> Result<AudioDevices, ServerFnError> {
+    use crate::server::AppState;
+
+    let state = expect_context::<AppState>();
+    let Some(ctrl) = state.audio.get() else {
+        return Ok(AudioDevices::default());
+    };
+    let current = ctrl.current();
+    let devices = tokio::task::spawn_blocking(crate::audio::list_input_devices)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(AudioDevices { devices, current })
+}
+
+/// Server function: switch the capture device and persist the choice.
+#[server(endpoint = "set_audio_device")]
+pub async fn set_audio_device(name: String) -> Result<(), ServerFnError> {
+    use crate::server::{AppState, preferences};
+
+    let state = expect_context::<AppState>();
+    if state.audio.get().is_none() {
+        return Err(ServerFnError::new("audio pipeline is not running"));
+    }
+    let audio = state.audio.clone();
+    let device = name.clone();
+    tokio::task::spawn_blocking(move || match audio.get() {
+        Some(ctrl) => ctrl.switch(&device),
+        None => Err(anyhow::anyhow!("audio pipeline is not running")),
+    })
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    preferences::save(&preferences::Preferences { audio_device: Some(name) })
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(())
+}
+
 /// Server function: recent detections, newest first.
 #[server(endpoint = "list_detections")]
 pub async fn list_detections(limit: u32) -> Result<Vec<DetectionDto>, ServerFnError> {
@@ -168,9 +223,11 @@ fn Dashboard() -> impl IntoView {
     let level = RwSignal::new(AudioLevel::default());
     let connected = RwSignal::new(false);
     let query = RwSignal::new(String::new());
+    let guess = RwSignal::new(LiveGuess::default());
+    let devices = RwSignal::new(AudioDevices::default());
 
     // Client-only: load initial data + open the live SSE stream after mount.
-    Effect::new(move |_| setup_live(detections, level, connected));
+    Effect::new(move |_| setup_live(detections, level, connected, guess, devices));
 
     // Reload the list from the current search query (empty → recent).
     let reload = move || {
@@ -197,8 +254,38 @@ fn Dashboard() -> impl IntoView {
         </header>
         <main>
             <section class="panel">
-                <h2>"Live audio monitor"</h2>
+                <div class="panel-head">
+                    <h2>"Live audio monitor"</h2>
+                    <select
+                        class="device"
+                        title="Input device"
+                        prop:value=move || devices.get().current
+                        on:change=move |ev| {
+                            let name = event_target_value(&ev);
+                            leptos::task::spawn_local(async move {
+                                let _ = set_audio_device(name).await;
+                            });
+                        }
+                    >
+                        <For each=move || devices.get().devices key=|d| d.clone() let:d>
+                            <option value=d.clone()>{d.clone()}</option>
+                        </For>
+                    </select>
+                </div>
                 <div class="monitor">
+                    <div class="guess">
+                        {move || {
+                            let g = guess.get();
+                            if g.common_name.is_empty() {
+                                "Listening…".to_string()
+                            } else {
+                                format!(
+                                    "Closest match: {} ({}) — {:.0}%",
+                                    g.common_name, g.scientific_name, g.confidence * 100.0,
+                                )
+                            }
+                        }}
+                    </div>
                     <div class="vu-row">
                         <span class="vu-label">"RMS"</span>
                         <div class="vu">
@@ -337,22 +424,36 @@ fn db_pct(amp: f32) -> f32 {
 // ---------------------------------------------------------------------------
 
 #[cfg(not(feature = "hydrate"))]
-fn setup_live(_: RwSignal<Vec<DetectionDto>>, _: RwSignal<AudioLevel>, _: RwSignal<bool>) {}
+fn setup_live(
+    _: RwSignal<Vec<DetectionDto>>,
+    _: RwSignal<AudioLevel>,
+    _: RwSignal<bool>,
+    _: RwSignal<LiveGuess>,
+    _: RwSignal<AudioDevices>,
+) {
+}
 
 #[cfg(feature = "hydrate")]
 fn setup_live(
     detections: RwSignal<Vec<DetectionDto>>,
     level: RwSignal<AudioLevel>,
     connected: RwSignal<bool>,
+    guess: RwSignal<LiveGuess>,
+    devices: RwSignal<AudioDevices>,
 ) {
     use wasm_bindgen::JsCast;
     use wasm_bindgen::prelude::Closure;
     use web_sys::{Event, EventSource, MessageEvent};
 
-    // Initial load via the server function.
+    // Initial load via server functions.
     leptos::task::spawn_local(async move {
         if let Ok(list) = list_detections(50).await {
             detections.set(list);
+        }
+    });
+    leptos::task::spawn_local(async move {
+        if let Ok(d) = list_audio_devices().await {
+            devices.set(d);
         }
     });
 
@@ -383,6 +484,16 @@ fn setup_live(
     });
     let _ = es.add_event_listener_with_callback("audio", audio_cb.as_ref().unchecked_ref());
     audio_cb.forget();
+
+    let live_cb = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
+        if let Some(txt) = e.data().as_string()
+            && let Ok(g) = serde_json::from_str::<LiveGuess>(&txt)
+        {
+            guess.set(g);
+        }
+    });
+    let _ = es.add_event_listener_with_callback("live", live_cb.as_ref().unchecked_ref());
+    live_cb.forget();
 
     let open_cb = Closure::<dyn FnMut(Event)>::new(move |_| connected.set(true));
     es.set_onopen(Some(open_cb.as_ref().unchecked_ref()));

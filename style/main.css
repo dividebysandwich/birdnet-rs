@@ -37,6 +37,15 @@ tr.reviewed-false { background: rgba(255,80,80,0.06); }
 tr.reviewed-false .verdict { color: #ff5050; }
 tr.reviewed-false td:nth-child(2) { opacity: 0.6; text-decoration: line-through; }
 .monitor { display: grid; grid-template-columns: 1fr; gap: 0.75rem; }
+.device {
+  background: #0c0e13; border: 1px solid #262b36; border-radius: 6px; color: #e6e6e6;
+  padding: 0.35rem 0.5rem; font-size: 0.8rem; max-width: 260px; margin-bottom: 0.75rem;
+}
+.device:focus { outline: none; border-color: #3a86ff; }
+.guess {
+  font-size: 1.05rem; font-weight: 600; color: #e6e6e6; padding: 0.3rem 0;
+  font-variant-numeric: tabular-nums;
+}
 .vu-row { display: flex; align-items: center; gap: 0.75rem; }
 .vu-label { width: 3rem; font-size: 0.8rem; color: #8b93a7; }
 .vu { flex: 1; height: 14px; background: #0c0e13; border-radius: 7px; overflow: hidden; }

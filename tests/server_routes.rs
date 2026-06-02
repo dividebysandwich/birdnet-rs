@@ -53,7 +53,12 @@ async fn setup() -> (axum::Router, tempfile::TempDir) {
     .await
     .unwrap();
 
-    let app_state = AppState { db, sse: SseManager::new(), export_path: export };
+    let app_state = AppState {
+        db,
+        sse: SseManager::new(),
+        export_path: export,
+        audio: std::sync::Arc::new(std::sync::OnceLock::new()),
+    };
     let serve_state = ServeState {
         leptos_options: LeptosOptions::builder().output_name("birdnet-rs").build(),
         app: app_state,
