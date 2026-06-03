@@ -116,6 +116,41 @@ lto = true
 codegen-units = 1
 panic = "abort"
 
+# --- Debian packaging (cargo-deb) ---------------------------------------------
+# Built in CI by `cargo deb --no-build` after `cargo leptos build --release`,
+# so it packages the existing binary + bundled site. The BirdNET model is not
+# shipped (size + CC BY-NC-SA license); fetch it with the bundled scripts.
+[package.metadata.deb]
+maintainer = "dividebysandwich <josef.jahn@gmail.com>"
+copyright = "2026 dividebysandwich, MIT licensed"
+license-file = ["LICENSE", "0"]
+section = "sound"
+priority = "optional"
+# `$auto` resolves shared-lib deps from the binary (libasound2 / libasound2t64,
+# libc, …) via dpkg-shlibdeps; ffmpeg is a runtime dep of the BirdWeather upload.
+depends = "$auto, ffmpeg"
+extended-description = """
+Self-hosted realtime soundscape analyzer: listens to a microphone 24/7,
+identifies bird species with the BirdNET neural network, filters false
+positives, stores detections and audio clips, and serves a live web dashboard.
+Download/convert the BirdNET model separately (see the bundled scripts under
+/usr/share/birdnet-rs/scripts) due to its size and non-commercial licensing."""
+assets = [
+    ["target/release/birdnet-rs", "usr/bin/", "755"],
+    ["target/site/**/*", "usr/share/birdnet-rs/site/", "644"],
+    ["scripts/download_model.sh", "usr/share/birdnet-rs/scripts/", "755"],
+    ["scripts/convert_model.sh", "usr/share/birdnet-rs/scripts/", "755"],
+    ["README.md", "usr/share/doc/birdnet-rs/README", "644"],
+]
+
+# Installs /lib/systemd/system/birdnet-rs.service but leaves it disabled and
+# stopped — set up the model + audio device, then `systemctl enable --now`.
+[package.metadata.deb.systemd-units]
+unit-scripts = "packaging/linux"
+unit-name = "birdnet-rs"
+enable = false
+start = false
+
 [package.metadata.leptos]
 output-name = "birdnet-rs"
 site-root = "target/site"

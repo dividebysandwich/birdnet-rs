@@ -1,0 +1,26 @@
+[Unit]
+Description=BirdNET-RS realtime bird-sound analyzer
+Documentation=https://github.com/dividebysandwich/birdnet-rs
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+# Run under an isolated, auto-created system user. StateDirectory gives us a
+# writable /var/lib/birdnet-rs that becomes the working dir, where the daemon
+# writes config.yaml (on first run), the SQLite DB, clips/ and images/. Put the
+# downloaded model under /var/lib/birdnet-rs/models/ (see the bundled scripts).
+DynamicUser=yes
+StateDirectory=birdnet-rs
+WorkingDirectory=/var/lib/birdnet-rs
+# Needed to capture from ALSA / hardware input devices.
+SupplementaryGroups=audio
+Environment=LEPTOS_SITE_ROOT=/usr/share/birdnet-rs/site
+Environment=LEPTOS_SITE_ADDR=0.0.0.0:8080
+Environment=RUST_LOG=info,ort=warn,sqlx=warn
+ExecStart=/usr/bin/birdnet-rs
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

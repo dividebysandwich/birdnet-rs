@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WiX v5 source for the BirdNET-RS MSI.
+
+  Version + the staging directory to harvest are passed via environment
+  variables so the same file works for any release:
+    set VERSION=0.1.0
+    set STAGEDIR=C:\path\to\dist\birdnet-rs-0.1.0-windows-x64
+    wix build packaging\windows\birdnet-rs.wxs -o out.msi
+
+  `<Files Include>` auto-harvests the whole staging tree (birdnet-rs.exe, the
+  site\ bundle, scripts\, run.bat, README, LICENSE) into the install folder,
+  preserving subdirectories. The BirdNET model is NOT bundled (size + license);
+  fetch it after install with the included scripts.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="BirdNET-RS"
+           Manufacturer="dividebysandwich"
+           Version="$(env.VERSION)"
+           UpgradeCode="7F3A9C2E-5B1D-4E6A-9C84-2D1F6B0A3E57"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of BirdNET-RS is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="BirdNET-RS">
+        <Files Include="$(env.STAGEDIR)\**" />
+      </Directory>
+    </StandardDirectory>
+  </Package>
+</Wix>

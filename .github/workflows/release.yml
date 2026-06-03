@@ -1,0 +1,160 @@
+name: Release
+
+# Build distributable packages for every supported platform:
+#   * Debian .deb            — x86_64 (amd64) and Raspberry Pi (arm64)
+#   * portable tar.gz        — linux x86_64 and aarch64
+#   * Windows .zip + .msi    — x64
+#
+# Builds run on tag pushes (v*) and produce a GitHub Release; a manual
+# workflow_dispatch builds the same artifacts (uploaded as workflow artifacts)
+# for testing without cutting a release.
+#
+# Each binary is self-contained: ONNX Runtime is statically linked via `ort`
+# (download-binaries), so no separate runtime needs shipping. Builds are native
+# per arch (incl. an arm64 runner for the Pi), avoiding cross-compilation of the
+# ALSA + ONNX stack. The BirdNET model is never bundled (size + CC BY-NC-SA);
+# packages ship the download/convert scripts instead.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # --- Linux: .deb + tar.gz, natively on x86_64 and arm64 ---------------------
+  linux:
+    name: linux-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-leptos and cargo-deb
+        run: cargo binstall -y cargo-leptos cargo-deb
+
+      - name: Build (server + WASM + site bundle)
+        run: cargo leptos build --release
+
+      - name: Resolve version
+        id: ver
+        run: echo "version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Stage portable tarball
+        id: stage
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          NAME="birdnet-rs-${VER}-linux-${{ matrix.arch }}"
+          mkdir -p "dist/${NAME}/site"
+          cp target/release/birdnet-rs "dist/${NAME}/"
+          cp -r target/site/. "dist/${NAME}/site/"
+          cp -r scripts "dist/${NAME}/scripts"
+          cp packaging/run.sh "dist/${NAME}/run.sh"
+          cp README.md LICENSE "dist/${NAME}/"
+          chmod +x "dist/${NAME}/run.sh" "dist/${NAME}/birdnet-rs"
+          tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Build .deb
+        run: |
+          cargo deb --no-build --output dist/
+          ls -la dist/
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.deb
+
+  # --- Windows: .zip + .msi ---------------------------------------------------
+  windows:
+    name: windows-x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-leptos
+        run: cargo binstall -y cargo-leptos
+
+      - name: Build (server + WASM + site bundle)
+        run: cargo leptos build --release
+
+      - name: Install WiX toolset
+        run: dotnet tool install --global wix --version 5.0.2
+
+      - name: Stage, zip and build MSI
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"').Matches[0].Groups[1].Value
+          $name = "birdnet-rs-$ver-windows-x64"
+          New-Item -ItemType Directory -Force -Path "dist/$name/site" | Out-Null
+          Copy-Item target/release/birdnet-rs.exe "dist/$name/"
+          Copy-Item -Recurse target/site/* "dist/$name/site/"
+          Copy-Item -Recurse scripts "dist/$name/scripts"
+          Copy-Item packaging/run.bat "dist/$name/run.bat"
+          Copy-Item README.md, LICENSE "dist/$name/"
+
+          # Portable .zip
+          Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
+
+          # .msi — WiX harvests the staged folder ($env:STAGEDIR) at build time.
+          $env:VERSION = $ver
+          $env:STAGEDIR = (Resolve-Path "dist/$name").Path
+          wix build packaging/windows/birdnet-rs.wxs -o "dist/$name.msi"
+          Get-ChildItem dist
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: |
+            dist/*.zip
+            dist/*.msi
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/*.msi
