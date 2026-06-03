@@ -64,15 +64,12 @@ th { color: #8b93a7; font-weight: 600; font-size: 0.75rem; text-transform: upper
 .conf { font-variant-numeric: tabular-nums; }
 .bar { height: 6px; background: #262b36; border-radius: 3px; overflow: hidden; width: 80px; max-width: 100%; }
 .bar > span { display: block; height: 100%; background: #3a86ff; }
-.spectro-thumb { height: 44px; max-width: 104px; border-radius: 4px; background: #000; display: block; }
+.spectro-thumb { height: 80px; max-width: 200px; border-radius: 4px; background: #000; display: block; }
 .bird-thumb { height: 44px; width: 44px; object-fit: cover; border-radius: 6px; background: #0c0e13; display: block; }
 /* Native audio controls need ~40px+ height or the play button is clipped to an
    empty bar. Kept compact (play + time, no volume slider) so the row's controls
    all fit without the table overflowing. */
 audio { height: 44px; width: 100%; min-width: 130px; max-width: 150px; }
-/* Long capture-source names (e.g. PipeWire device paths) are truncated with an
-   ellipsis so they can't widen the table; the full value is in the title tip. */
-td.src { max-width: 130px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .empty { color: #5b6376; padding: 1rem 0.6rem; }
 
 tr.flash { animation: flash 1.2s ease-out; }
@@ -163,8 +160,6 @@ td.review .verdict { margin-left: 4px; font-weight: 700; }
   }
   td:empty { display: none; } /* hide missing clip/spectrogram cells */
   td[data-label="Species"] { flex-direction: column; align-items: flex-start; gap: 0.1rem; }
-  /* In card view there's room: show the full source and a wider player. */
-  td.src { max-width: none; white-space: normal; overflow: visible; text-align: right; }
   .bar { width: 120px; }
   audio { min-width: 0; max-width: 60vw; }
 }

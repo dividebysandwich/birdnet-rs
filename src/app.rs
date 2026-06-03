@@ -727,7 +727,7 @@ fn Dashboard() -> impl IntoView {
                         <thead>
                             <tr>
                                 <th>"Time"</th><th>"Image"</th><th>"Species"</th><th>"Confidence"</th>
-                                <th>"Source"</th><th>"Spectrogram"</th><th>"Clip"</th><th>"Review"</th>
+                                <th>"Spectrogram"</th><th>"Clip"</th><th>"Review"</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -804,7 +804,6 @@ fn detection_row(d: DetectionDto, reload: RwSignal<u32>) -> impl IntoView {
                 {format!("{pct}%")}
                 <div class="bar"><span style:width=move || format!("{pct}%")></span></div>
             </td>
-            <td class="src" data-label="Source" title=d.source.clone()>{d.source.clone()}</td>
             <td data-label="Spectrogram">
                 {has_clip.then(|| view! {
                     <img class="spectro-thumb" loading="lazy"
