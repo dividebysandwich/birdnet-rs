@@ -11,11 +11,11 @@ dashboard.
 ## Pipeline
 
 ```
-soundcard (cpal) → downmix mono → resample 48 kHz (rubato)
-  → 3 s windows w/ overlap → BirdNET ONNX inference (birdnet-onnx crate, on ort)
-  → top-k + activation → threshold + false-positive + dynamic-threshold filters
-  → actions: store (SeaORM/SQLite) + WAV clip (hound) + SSE broadcast
-  → Leptos dashboard
+soundcard (cpal) -> downmix mono -> resample 48 kHz (rubato)
+  -> 3 s windows w/ overlap -> BirdNET ONNX inference (birdnet-onnx crate, on ort)
+  -> top-k + activation -> threshold + false-positive + dynamic-threshold filters
+  -> actions: store (SeaORM/SQLite) + WAV clip (hound) + SSE broadcast
+  -> Leptos dashboard
 ```
 
 ## Architecture
@@ -23,7 +23,7 @@ soundcard (cpal) → downmix mono → resample 48 kHz (rubato)
 A single **Leptos fullstack** crate built with `cargo-leptos`:
 
 - The server (`ssr` feature) runs the realtime daemon and an `axum` server.
-- The browser app (`hydrate` feature → WASM) is the same crate, compiled for
+- The browser app (`hydrate` feature -> WASM) is the same crate, compiled for
   `wasm32-unknown-unknown`; backend deps are `ssr`-only and never reach the WASM bundle.
 - Queries use `#[server]` functions (e.g. `list_detections`); the realtime push
   feed (live detections + audio meter) and binary media (clip WAV, spectrogram
@@ -34,8 +34,8 @@ A single **Leptos fullstack** crate built with `cargo-leptos`:
 
 - **Inference via the [`birdnet-onnx`](https://github.com/tphakala/rust-birdnet-onnx)
   crate** (the birdnet-go author's own library, built on `ort` 2.0-rc). It
-  auto-detects the model type and applies the correct activation (BirdNET →
-  sigmoid, Perch → softmax, BSG → pre-sigmoid), so we don't hand-roll it.
+  auto-detects the model type and applies the correct activation (BirdNET ->
+  sigmoid, Perch -> softmax, BSG -> pre-sigmoid)
 - **Leptos fullstack** (SSR + hydration + server functions), one crate.
 - **64-bit targets** (`x86_64`, `aarch64`); 32-bit ARM is not supported.
 - **SeaORM + SQLite** datastore (MySQL/Postgres possible later).
@@ -48,7 +48,7 @@ model + labels, then convert the model to ONNX once.
 ### One-shot (download + convert)
 
 ```bash
-scripts/download_model.sh --convert   # → models/BirdNET_GLOBAL_6K_V2.4.onnx + labels
+scripts/download_model.sh --convert   # -> models/BirdNET_GLOBAL_6K_V2.4.onnx + labels
 ```
 
 `download_model.sh` pulls the FP32 model and the index-aligned label file from
@@ -63,8 +63,8 @@ the model/labels are guaranteed to match). Useful flags:
 ### Or do the two steps separately
 
 ```bash
-scripts/download_model.sh                     # → models/*.tflite + *_Labels_en_us.txt
-scripts/convert_model.sh                      # → models/BirdNET_GLOBAL_6K_V2.4.onnx
+scripts/download_model.sh                     # -> models/*.tflite + *_Labels_en_us.txt
+scripts/convert_model.sh                      # -> models/BirdNET_GLOBAL_6K_V2.4.onnx
 ```
 
 `convert_model.sh` needs `git` and a Python interpreter in the **3.10–3.13**
@@ -114,22 +114,17 @@ Then open <http://localhost:8080> (the address is the Leptos `site-addr`).
 ### Dashboard
 
 - **Live audio monitor** — a VU meter (RMS + peak) and a scrolling spectrogram
-  of the microphone input, fed by `audio` SSE events ~20×/s. This is the
-  "is the mic working / what's the ambient soundscape" indicator.
-- **Input device selector** — pick the *actual* capture device from a dropdown;
-  the choice is applied live (no restart) and persisted to the OS user-config
+  of the microphone input, fed by `audio` SSE events.
+- **Input device selector** — pick the capture device from a dropdown;
+  the choice is applied live (no restart needed) and persisted to the OS user-config
   directory (`~/.config/birdnet-rs/preferences.json` on Linux, `%APPDATA%\…`
   on Windows, `~/Library/Application Support/…` on macOS) so it's restored next
-  launch. On Linux, capture uses ALSA directly so individual PipeWire/Pulse
-  sources (and hardware cards on plain-ALSA systems) are listed — not just the
-  high-level API plugins cpal exposes; macOS/Windows use cpal.
+  launch.
 - **Sample-rate selector** — choose the capture rate (44.1 kHz … 256 kHz, filtered
   to what the device reports); also persisted. The BirdNET v2.4 model runs at
-  48 kHz, so higher rates are captured and downsampled for inference (real
-  high-rate capture, groundwork for ultrasonic/bat models).
+  48 kHz, so higher rates are captured and downsampled for inference.
 - **Closest match** — the current best-guess species + match % shown in
-  realtime as audio is analyzed (`live` SSE event), even when it's below the
-  detection threshold.
+  realtime as audio is analyzed (`live` SSE event)
 - **Detections** — recent detections (loaded via the `list_detections` server
   function, live-prepended via `detection` SSE), with **search** by name/code,
   per-row **review** (✓ correct / ✗ false-positive), a rendered **clip
@@ -158,7 +153,7 @@ birdnet:
     enabled: false     # also needs the range model + non-zero lat/lon
     model_path: models/BirdNET_GLOBAL_6K_V2.4_RangeModel.onnx
     threshold: 0.01
-    rerank: false      # true → multiply confidence by location score
+    rerank: false      # true -> multiply confidence by location score
 realtime:
   audio:
     source: default    # device name, or "default"
@@ -251,5 +246,5 @@ imageprovider:
 **BirdWeather** encodes each soundscape to loudness-normalized FLAC via `ffmpeg`
 (EBU R128, −23 LUFS) — `ffmpeg` must be on `PATH`. **MQTT** publishes a JSON
 message per detection (+ an online/offline status and an HA discovery sensor).
-The **image provider** resolves species → a free Wikipedia thumbnail, caches it
+The **image provider** resolves species -> a free Wikipedia thumbnail, caches it
 under `cache_dir`, and the dashboard shows it (served via `/media/image/{id}`).
