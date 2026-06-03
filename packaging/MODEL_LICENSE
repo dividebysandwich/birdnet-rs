@@ -1,0 +1,27 @@
+BirdNET model — license & attribution
+======================================
+
+This notice accompanies the BirdNET machine-learning model files distributed by
+birdnet-rs (the .onnx model(s), the label list, and the eBird taxonomy data).
+
+These model files are NOT covered by the MIT license of the birdnet-rs source
+code. They are a separate work:
+
+    BirdNET GLOBAL 6K v2.4
+    © K. Lisa Yang Center for Conservation Bioacoustics,
+      Cornell Lab of Ornithology.
+    Licensed under Creative Commons
+      Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)
+      https://creativecommons.org/licenses/by-nc-sa/4.0/
+    Canonical source: https://zenodo.org/records/15050749
+
+Changes made: the model was format-converted from TensorFlow Lite to ONNX
+(keeping the embedded mel-spectrogram front-end) using the official converter at
+https://github.com/tphakala/birdnet-onnx-converter. No weights were retrained or
+altered; only the serialization format changed.
+
+What CC BY-NC-SA 4.0 means for you:
+  * Attribution  — keep this notice with the model and credit the Cornell Lab.
+  * NonCommercial — you may not use the model for commercial purposes.
+  * ShareAlike   — if you redistribute the model (converted or not), you must
+                   do so under CC BY-NC-SA 4.0 and keep this notice.

@@ -19,3 +19,28 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+-------------------------------------------------------------------------------
+
+NOTE ON THE BirdNET MODEL (separate license)
+
+The MIT license above covers the birdnet-rs source code only. It does NOT cover
+the BirdNET machine-learning model — the model weights, the species label list,
+or the eBird taxonomy data — which is a separate work under a different license:
+
+    BirdNET GLOBAL 6K v2.4
+    (c) K. Lisa Yang Center for Conservation Bioacoustics,
+        Cornell Lab of Ornithology.
+    Licensed under Creative Commons
+        Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)
+        https://creativecommons.org/licenses/by-nc-sa/4.0/
+    Canonical source: https://zenodo.org/records/15050749
+
+For convenience, birdnet-rs distributes a format-converted (TensorFlow Lite ->
+ONNX) copy of this model as a GitHub release asset; the packaged builds download
+it on first run. Only the serialization format was changed — no weights were
+retrained or altered. The converted model remains under CC BY-NC-SA 4.0, which
+means use of the model (including via birdnet-rs) is limited to NON-COMMERCIAL
+purposes, requires ATTRIBUTION, and any redistribution of the model — converted
+or not — must remain under CC BY-NC-SA 4.0. See the MODEL_LICENSE file shipped
+alongside the model files.

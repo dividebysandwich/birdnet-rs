@@ -127,27 +127,38 @@ license-file = ["LICENSE", "0"]
 section = "sound"
 priority = "optional"
 # `$auto` resolves shared-lib deps from the binary (libasound2 / libasound2t64,
-# libc, …) via dpkg-shlibdeps; ffmpeg is a runtime dep of the BirdWeather upload.
-depends = "$auto, ffmpeg"
+# libc, …) via dpkg-shlibdeps; ffmpeg is a runtime dep of the BirdWeather
+# upload; curl is used by the first-run model fetch (fetch-model.sh).
+depends = "$auto, ffmpeg, curl"
 extended-description = """
 Self-hosted realtime soundscape analyzer: listens to a microphone 24/7,
 identifies bird species with the BirdNET neural network, filters false
 positives, stores detections and audio clips, and serves a live web dashboard.
-Download/convert the BirdNET model separately (see the bundled scripts under
-/usr/share/birdnet-rs/scripts) due to its size and non-commercial licensing."""
+On first start the pre-converted BirdNET model (CC BY-NC-SA 4.0, Cornell Lab)
+is downloaded automatically — see /usr/share/doc/birdnet-rs/MODEL_LICENSE."""
 assets = [
     ["target/release/birdnet-rs", "usr/bin/", "755"],
     ["target/site/**/*", "usr/share/birdnet-rs/site/", "644"],
+    ["scripts/fetch-model.sh", "usr/share/birdnet-rs/scripts/", "755"],
     ["scripts/download_model.sh", "usr/share/birdnet-rs/scripts/", "755"],
     ["scripts/convert_model.sh", "usr/share/birdnet-rs/scripts/", "755"],
     ["README.md", "usr/share/doc/birdnet-rs/README", "644"],
+    ["packaging/MODEL_LICENSE", "usr/share/doc/birdnet-rs/MODEL_LICENSE", "644"],
 ]
 
-# Installs /lib/systemd/system/birdnet-rs.service but leaves it disabled and
-# stopped — set up the model + audio device, then `systemctl enable --now`.
-[package.metadata.deb.systemd-units]
-unit-scripts = "packaging/linux"
+# Two units, both installed but left disabled/stopped:
+#   birdnet-rs.service             — the daemon + web server
+#   birdnet-rs-fetch-model.service — one-shot, downloads the model on first start
+# Enable with: systemctl enable --now birdnet-rs   (Wants= pulls in the fetch).
+[[package.metadata.deb.systemd-units]]
 unit-name = "birdnet-rs"
+unit-scripts = "packaging/linux"
+enable = false
+start = false
+
+[[package.metadata.deb.systemd-units]]
+unit-name = "birdnet-rs-fetch-model"
+unit-scripts = "packaging/linux"
 enable = false
 start = false
 

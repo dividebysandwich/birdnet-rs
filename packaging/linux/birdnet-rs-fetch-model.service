@@ -1,0 +1,21 @@
+[Unit]
+Description=Fetch the pre-converted BirdNET model for BirdNET-RS
+Documentation=https://github.com/dividebysandwich/birdnet-rs
+After=network-online.target
+Wants=network-online.target
+Before=birdnet-rs.service
+# Only run while the model is missing — i.e. once, on first start.
+ConditionPathExists=!/var/lib/birdnet-rs/models/BirdNET_GLOBAL_6K_V2.4.onnx
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Same isolated user + /var/lib/birdnet-rs StateDirectory as the main service;
+# systemd reconciles ownership between the two units on start.
+DynamicUser=yes
+StateDirectory=birdnet-rs
+WorkingDirectory=/var/lib/birdnet-rs
+ExecStart=/usr/share/birdnet-rs/scripts/fetch-model.sh /var/lib/birdnet-rs/models
+
+[Install]
+WantedBy=multi-user.target

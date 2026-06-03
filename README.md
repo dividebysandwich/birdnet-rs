@@ -42,10 +42,29 @@ A single **Leptos fullstack** crate built with `cargo-leptos`:
 
 ## Getting the model
 
-BirdNET v2.4 ships officially as TensorFlow Lite, so the flow is: download the
-model + labels, then convert the model to ONNX once.
+BirdNET v2.4 ships officially as TensorFlow Lite, but birdnet-rs runs ONNX. You
+have two options: grab the **pre-converted** model (fast, no toolchain — this is
+what the packaged builds use), or **download + convert** it yourself from the
+official weights.
 
-### One-shot (download + convert)
+### Pre-converted model (default for packaged builds)
+
+The packaged builds (`.deb`, `.tar.gz`, `.zip`, `.msi`) download the
+pre-converted ONNX model, labels and taxonomy from this repo's GitHub releases
+**automatically on first run** — no Python, TensorFlow or git needed. To fetch
+it manually (e.g. for a `cargo`-built checkout):
+
+```bash
+scripts/fetch-model.sh            # -> models/{*.onnx, *_Labels_en_us.txt, eBird_taxonomy_*.json}
+```
+
+Set `BIRDNET_MODEL_BASE_URL` to pin a specific release tag instead of `latest`.
+The model is BirdNET GLOBAL 6K v2.4, **CC BY-NC-SA 4.0** (Cornell Lab) — see
+[Licensing](#licensing) and the `MODEL_LICENSE` shipped beside the model.
+
+### Or convert it yourself from the official TFLite weights
+
+#### One-shot (download + convert)
 
 ```bash
 scripts/download_model.sh --convert   # -> models/BirdNET_GLOBAL_6K_V2.4.onnx + labels
@@ -60,7 +79,7 @@ the model/labels are guaranteed to match). Useful flags:
 - `--force` — re-download even if files exist
 - `--convert` — also run the ONNX conversion afterwards
 
-### Or do the two steps separately
+#### Or do the two steps separately
 
 ```bash
 scripts/download_model.sh                     # -> models/*.tflite + *_Labels_en_us.txt
@@ -84,9 +103,23 @@ for a half-precision model (smaller, good on a Raspberry Pi 5).
 
 The resulting ONNX model keeps the embedded mel front-end, so it takes raw
 48 kHz PCM (`[1, 144000]`) and outputs one logit per species (`[1, 6522]`).
-Models are not committed to the repo due to size and licensing reasons (the
-official BirdNET v2.4 weights are CC BY-NC-SA from the Cornell Lab; canonical
-source is [Zenodo 15050749](https://zenodo.org/records/15050749)).
+Models are not committed to the repo (size + licensing); they're published as
+release assets and downloaded on demand instead — see [Licensing](#licensing).
+
+## Licensing
+
+Two separate licenses apply:
+
+- **birdnet-rs source code** — [MIT](LICENSE).
+- **BirdNET model** (the `.onnx` weights, species labels, and eBird taxonomy) —
+  **CC BY-NC-SA 4.0**, © K. Lisa Yang Center for Conservation Bioacoustics,
+  Cornell Lab of Ornithology
+  ([source](https://zenodo.org/records/15050749)). birdnet-rs re-hosts a
+  format-converted (TFLite → ONNX) copy as a release asset and downloads it on
+  first run; only the format changed. Using the model — including via
+  birdnet-rs — is therefore **non-commercial**, requires **attribution**, and
+  any redistribution of the model must stay under **CC BY-NC-SA 4.0**. The full
+  notice ships as `MODEL_LICENSE` next to the model files.
 
 ## Build & run
 

@@ -1,8 +1,10 @@
 [Unit]
 Description=BirdNET-RS realtime bird-sound analyzer
 Documentation=https://github.com/dividebysandwich/birdnet-rs
-After=network-online.target sound.target
+After=network-online.target sound.target birdnet-rs-fetch-model.service
 Wants=network-online.target
+# Pull in the one-shot model download; it no-ops once the model is present.
+Wants=birdnet-rs-fetch-model.service
 
 [Service]
 Type=exec

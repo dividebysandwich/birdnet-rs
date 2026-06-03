@@ -50,10 +50,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - uses: cargo-bins/cargo-binstall@main
-
       - name: Install cargo-leptos and cargo-deb
-        run: cargo binstall -y cargo-leptos cargo-deb
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-leptos,cargo-deb
 
       - name: Build (server + WASM + site bundle)
         run: cargo leptos build --release
@@ -73,7 +73,8 @@ jobs:
           cp -r scripts "dist/${NAME}/scripts"
           cp packaging/run.sh "dist/${NAME}/run.sh"
           cp README.md LICENSE "dist/${NAME}/"
-          chmod +x "dist/${NAME}/run.sh" "dist/${NAME}/birdnet-rs"
+          cp packaging/MODEL_LICENSE "dist/${NAME}/MODEL_LICENSE"
+          chmod +x "dist/${NAME}/run.sh" "dist/${NAME}/birdnet-rs" "dist/${NAME}/scripts/fetch-model.sh"
           tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
           echo "name=${NAME}" >> "$GITHUB_OUTPUT"
 
@@ -111,10 +112,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - uses: cargo-bins/cargo-binstall@main
-
       - name: Install cargo-leptos
-        run: cargo binstall -y cargo-leptos
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-leptos
 
       - name: Build (server + WASM + site bundle)
         run: cargo leptos build --release
@@ -133,6 +134,7 @@ jobs:
           Copy-Item -Recurse scripts "dist/$name/scripts"
           Copy-Item packaging/run.bat "dist/$name/run.bat"
           Copy-Item README.md, LICENSE "dist/$name/"
+          Copy-Item packaging/MODEL_LICENSE "dist/$name/MODEL_LICENSE.txt"
 
           # Portable .zip
           Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
@@ -158,3 +160,51 @@ jobs:
           files: |
             dist/*.zip
             dist/*.msi
+
+  # --- Model: convert once, publish as release assets -------------------------
+  # The TFLite->ONNX conversion (Python + TensorFlow, a few minutes) runs once
+  # here, not on every user's machine. The resulting ONNX is platform-neutral,
+  # so a single conversion serves x86_64, aarch64 and Windows. The model is
+  # BirdNET GLOBAL 6K v2.4, CC BY-NC-SA 4.0 (Cornell Lab) — re-hosted with
+  # attribution (see packaging/MODEL_LICENSE), which the license permits for
+  # non-commercial distribution. Packages download these assets on first run.
+  model:
+    name: convert-model
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache converter checkout + venv
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: birdnet-onnx-converter-${{ hashFiles('scripts/convert_model.sh') }}
+
+      - name: Download + convert model (classifier + range)
+        run: scripts/download_model.sh --range --convert
+
+      - name: Assemble model release assets
+        run: |
+          mkdir -p model-dist
+          cp models/BirdNET_GLOBAL_6K_V2.4.onnx model-dist/
+          cp models/BirdNET_GLOBAL_6K_V2.4_RangeModel.onnx model-dist/
+          cp models/BirdNET_GLOBAL_6K_V2.4_Labels_en_us.txt model-dist/
+          cp models/eBird_taxonomy_codes_2021E.json model-dist/
+          cp packaging/MODEL_LICENSE model-dist/MODEL_LICENSE.txt
+          ls -la model-dist
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: model
+          path: model-dist/*
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: model-dist/*
