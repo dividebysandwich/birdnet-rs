@@ -722,16 +722,20 @@ fn Dashboard() -> impl IntoView {
                         </label>
                     </div>
                 </Show>
-                <div class="table-wrap">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>"Time"</th><th>"Image"</th><th>"Species"</th><th>"Confidence"</th>
-                                <th>"Spectrogram"</th><th>"Clip"</th><th>"Review"</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <Suspense fallback=|| ()>
+                // One Transition wraps everything that reads `page_res` (table
+                // rows, empty state, pager) so the resource is never read outside
+                // a suspense boundary — avoids hydration mismatches. Transition
+                // (vs Suspense) keeps the current page visible while the next loads.
+                <Transition fallback=|| ()>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>"Time"</th><th>"Image"</th><th>"Species"</th><th>"Confidence"</th>
+                                    <th>"Spectrogram"</th><th>"Clip"</th><th>"Review"</th>
+                                </tr>
+                            </thead>
+                            <tbody>
                                 <For
                                     each=move || page_res.get().map(|p| p.items).unwrap_or_default()
                                     key=|d| (d.id, d.verified.clone())
@@ -739,27 +743,27 @@ fn Dashboard() -> impl IntoView {
                                 >
                                     {detection_row(d, ui.reload)}
                                 </For>
-                            </Suspense>
-                        </tbody>
-                    </table>
-                </div>
-                <Show when=move || page_res.get().map(|p| p.items.is_empty()).unwrap_or(false)>
-                    <div class="empty">"No detections in this range."</div>
-                </Show>
-                <div class="pager">
-                    <button
-                        disabled=can_prev
-                        on:click=move |_| ui.page.update(|p| *p = p.saturating_sub(1))
-                    >"‹ Prev"</button>
-                    <span class="page-info">
-                        {move || format!("Page {} / {}", ui.page.get() + 1, total_pages())}
-                        {move || format!("  ·  {} total", total())}
-                    </span>
-                    <button
-                        disabled=can_next
-                        on:click=move |_| ui.page.update(|p| *p += 1)
-                    >"Next ›"</button>
-                </div>
+                            </tbody>
+                        </table>
+                    </div>
+                    <Show when=move || page_res.get().map(|p| p.items.is_empty()).unwrap_or(false)>
+                        <div class="empty">"No detections in this range."</div>
+                    </Show>
+                    <div class="pager">
+                        <button
+                            disabled=can_prev
+                            on:click=move |_| ui.page.update(|p| *p = p.saturating_sub(1))
+                        >"‹ Prev"</button>
+                        <span class="page-info">
+                            {move || format!("Page {} / {}", ui.page.get() + 1, total_pages())}
+                            {move || format!("  ·  {} total", total())}
+                        </span>
+                        <button
+                            disabled=can_next
+                            on:click=move |_| ui.page.update(|p| *p += 1)
+                        >"Next ›"</button>
+                    </div>
+                </Transition>
             </section>
         </main>
     }
