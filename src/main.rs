@@ -57,6 +57,12 @@ async fn main() {
     if let Some(birdweather) = saved.birdweather {
         settings.birdweather = birdweather;
     }
+    if let Some(lat) = saved.latitude {
+        settings.birdnet.latitude = lat;
+    }
+    if let Some(lon) = saved.longitude {
+        settings.birdnet.longitude = lon;
+    }
 
     let db = store::connect(&settings.output.sqlite.path)
         .await

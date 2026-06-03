@@ -19,8 +19,8 @@ use super::mqtt::MqttClient;
 pub struct Integrations {
     /// Shared HTTP client used to (re)build the BirdWeather uploader.
     http: reqwest::Client,
-    latitude: f64,
-    longitude: f64,
+    /// Station location `(latitude, longitude)`; settable from the UI.
+    location: Mutex<(f64, f64)>,
     mqtt: Mutex<Option<Arc<MqttClient>>>,
     mqtt_cfg: Mutex<MqttSettings>,
     birdweather: Mutex<Option<Arc<BirdWeather>>>,
@@ -33,13 +33,24 @@ impl Integrations {
     pub fn new(http: reqwest::Client, latitude: f64, longitude: f64) -> Arc<Integrations> {
         Arc::new(Integrations {
             http,
-            latitude,
-            longitude,
+            location: Mutex::new((latitude, longitude)),
             mqtt: Mutex::new(None),
             mqtt_cfg: Mutex::new(MqttSettings::default()),
             birdweather: Mutex::new(None),
             bw_cfg: Mutex::new(BirdWeatherSettings::default()),
         })
+    }
+
+    /// The current station location `(latitude, longitude)`.
+    pub fn location(&self) -> (f64, f64) {
+        *self.location.lock().unwrap()
+    }
+
+    /// Update the station location. Callers should re-run
+    /// [`apply_birdweather`](Self::apply_birdweather) so the uploader picks up
+    /// the new coordinates.
+    pub fn set_location(&self, latitude: f64, longitude: f64) {
+        *self.location.lock().unwrap() = (latitude, longitude);
     }
 
     /// The active MQTT client, if MQTT is enabled and connected.
@@ -84,11 +95,12 @@ impl Integrations {
         *self.mqtt_cfg.lock().unwrap() = cfg.clone();
     }
 
-    /// Rebuild the BirdWeather uploader from `cfg`.
+    /// Rebuild the BirdWeather uploader from `cfg` using the current location.
     pub fn apply_birdweather(&self, cfg: &BirdWeatherSettings) {
-        let bw = cfg.enabled.then(|| {
-            Arc::new(BirdWeather::new(self.http.clone(), cfg, self.latitude, self.longitude))
-        });
+        let (lat, lon) = self.location();
+        let bw = cfg
+            .enabled
+            .then(|| Arc::new(BirdWeather::new(self.http.clone(), cfg, lat, lon)));
         *self.birdweather.lock().unwrap() = bw;
         *self.bw_cfg.lock().unwrap() = cfg.clone();
     }

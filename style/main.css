@@ -130,6 +130,11 @@ td.review .verdict { margin-left: 4px; font-weight: 700; }
 .field.check > span { color: #e6e6e6; font-size: 0.9rem; }
 .field.check input[type="checkbox"] { width: 16px; height: 16px; accent-color: #3a86ff; }
 .settings-form code, .hint code { background: #0c0e13; padding: 0.05rem 0.3rem; border-radius: 4px; font-size: 0.8em; }
+/* Location picker */
+.loc-map { height: 300px; width: 100%; border-radius: 8px; border: 1px solid #262b36; background: #0c0e13; z-index: 0; }
+.leaflet-container { background: #0c0e13; }
+.latlon { display: flex; gap: 1rem; flex-wrap: wrap; }
+.latlon .field { flex: 1 1 160px; }
 .settings-actions { display: flex; align-items: center; gap: 1rem; margin-top: 0.5rem; }
 .settings-actions .apply {
   background: #1d3a5f; border: 1px solid #3a86ff; color: #e6e6e6; border-radius: 6px;

@@ -52,6 +52,11 @@ pub struct IntegrationPrefs {
     pub mqtt: Option<MqttSettings>,
     #[serde(default)]
     pub birdweather: Option<BirdWeatherSettings>,
+    /// Station location (overrides `birdnet.latitude`/`longitude` from config).
+    #[serde(default)]
+    pub latitude: Option<f64>,
+    #[serde(default)]
+    pub longitude: Option<f64>,
 }
 
 /// `<config_dir>/birdnet-rs/integrations.json`, if a config dir exists.

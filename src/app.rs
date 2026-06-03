@@ -3,7 +3,7 @@
 //! `hydrate`; server-only code is gated so it never reaches the WASM bundle.
 
 use leptos::prelude::*;
-use leptos_meta::{MetaTags, Stylesheet, Title, provide_meta_context};
+use leptos_meta::{MetaTags, Script, Stylesheet, Title, provide_meta_context};
 use leptos_router::components::{A, Route, Router, Routes};
 use leptos_router::StaticSegment;
 use serde::{Deserialize, Serialize};
@@ -100,11 +100,15 @@ pub struct BirdWeatherConfig {
     pub endpoint: String,
 }
 
-/// Both integration sections, as exchanged with the settings page.
+/// Both integration sections plus the shared station location, as exchanged
+/// with the settings page.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct IntegrationConfig {
     pub mqtt: MqttConfig,
     pub birdweather: BirdWeatherConfig,
+    /// Station latitude/longitude (used by BirdWeather + the range filter).
+    pub latitude: f64,
+    pub longitude: f64,
 }
 
 #[cfg(feature = "ssr")]
@@ -414,9 +418,12 @@ pub async fn review_detection(id: i32, verified: String) -> Result<(), ServerFnE
 #[server(endpoint = "get_integration_config")]
 pub async fn get_integration_config() -> Result<IntegrationConfig, ServerFnError> {
     let state = expect_context::<crate::server::AppState>();
+    let (latitude, longitude) = state.integrations.location();
     Ok(IntegrationConfig {
         mqtt: state.integrations.mqtt_config().into(),
         birdweather: state.integrations.birdweather_config().into(),
+        latitude,
+        longitude,
     })
 }
 
@@ -444,15 +451,25 @@ pub async fn set_integration_config(config: IntegrationConfig) -> Result<(), Ser
     if birdweather.enabled && birdweather.id.trim().is_empty() {
         return Err(ServerFnError::new("BirdWeather is enabled but the station ID is empty"));
     }
+    if !(-90.0..=90.0).contains(&config.latitude) {
+        return Err(ServerFnError::new("Latitude must be between -90 and 90"));
+    }
+    if !(-180.0..=180.0).contains(&config.longitude) {
+        return Err(ServerFnError::new("Longitude must be between -180 and 180"));
+    }
 
     preferences::save_integrations(&preferences::IntegrationPrefs {
         mqtt: Some(mqtt.clone()),
         birdweather: Some(birdweather.clone()),
+        latitude: Some(config.latitude),
+        longitude: Some(config.longitude),
     })
     .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     let state = expect_context::<AppState>();
+    state.integrations.set_location(config.latitude, config.longitude);
     state.integrations.apply_mqtt(&mqtt);
+    // Re-apply BirdWeather so the uploader picks up the new coordinates.
     state.integrations.apply_birdweather(&birdweather);
     Ok(())
 }
@@ -494,6 +511,9 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
                 <AutoReload options=options.clone() />
                 <HydrationScripts options />
                 <MetaTags />
+                // Location-picker glue (defines window.birdnetInitMap); tiny, and
+                // only wires up Leaflet which is loaded on the settings page.
+                <script src="/map.js"></script>
             </head>
             <body>
                 <App />
@@ -769,6 +789,47 @@ fn Dashboard() -> impl IntoView {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Settings-page location map (Leaflet, driven via the `/map.js` JS glue).
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "hydrate")]
+mod leaflet {
+    use wasm_bindgen::prelude::*;
+    #[wasm_bindgen]
+    extern "C" {
+        #[wasm_bindgen(js_name = birdnetInitMap)]
+        pub fn init_map(el_id: &str, lat: f64, lon: f64, on_pick: &Closure<dyn FnMut(f64, f64)>);
+        #[wasm_bindgen(js_name = birdnetSetMarker)]
+        pub fn set_marker(el_id: &str, lat: f64, lon: f64);
+    }
+}
+
+/// Create the Leaflet map bound to the `lat`/`lon` signals: clicking the map or
+/// dragging the marker updates them. Client-only; a no-op on the server.
+#[cfg(feature = "hydrate")]
+fn init_location_map(lat: RwSignal<String>, lon: RwSignal<String>) {
+    use wasm_bindgen::prelude::Closure;
+    let la = lat.get_untracked().parse::<f64>().unwrap_or(0.0);
+    let lo = lon.get_untracked().parse::<f64>().unwrap_or(0.0);
+    let cb = Closure::<dyn FnMut(f64, f64)>::new(move |plat: f64, plon: f64| {
+        lat.set(format!("{plat:.5}"));
+        lon.set(format!("{plon:.5}"));
+    });
+    leaflet::init_map("location-map", la, lo, &cb);
+    cb.forget(); // keep the callback alive for the page's lifetime
+}
+#[cfg(not(feature = "hydrate"))]
+fn init_location_map(_lat: RwSignal<String>, _lon: RwSignal<String>) {}
+
+/// Move the map marker to match hand-edited coordinates. Client-only.
+#[cfg(feature = "hydrate")]
+fn set_map_marker(lat: f64, lon: f64) {
+    leaflet::set_marker("location-map", lat, lon);
+}
+#[cfg(not(feature = "hydrate"))]
+fn set_map_marker(_lat: f64, _lon: f64) {}
+
 /// Update a detection's review status on the server, then bump `reload` so the
 /// detections resource refetches and the row reflects the new status.
 fn submit_review(id: i32, status: &'static str, reload: RwSignal<u32>) {
@@ -874,6 +935,10 @@ fn SettingsPage() -> impl IntoView {
     let b_threshold = RwSignal::new(String::new());
     let b_accuracy = RwSignal::new(String::new());
     let b_endpoint = RwSignal::new(String::new());
+    // Location form fields + a guard so the map is initialized only once.
+    let lat = RwSignal::new(String::new());
+    let lon = RwSignal::new(String::new());
+    let map_ready = RwSignal::new(false);
 
     // Populate the form once the active config loads (client-side).
     Effect::new(move |_| {
@@ -894,6 +959,13 @@ fn SettingsPage() -> impl IntoView {
             b_threshold.set(c.birdweather.threshold.to_string());
             b_accuracy.set(c.birdweather.location_accuracy.to_string());
             b_endpoint.set(c.birdweather.endpoint);
+            lat.set(format!("{:.5}", c.latitude));
+            lon.set(format!("{:.5}", c.longitude));
+            // Build the map once, centered on the loaded location.
+            if !map_ready.get_untracked() {
+                map_ready.set(true);
+                init_location_map(lat, lon);
+            }
         }
     });
 
@@ -919,6 +991,8 @@ fn SettingsPage() -> impl IntoView {
                 location_accuracy: b_accuracy.get().parse().unwrap_or(500.0),
                 endpoint: b_endpoint.get(),
             },
+            latitude: lat.get().trim().parse().unwrap_or(0.0),
+            longitude: lon.get().trim().parse().unwrap_or(0.0),
         };
         saving.set(true);
         status.set(String::new());
@@ -938,6 +1012,51 @@ fn SettingsPage() -> impl IntoView {
             <span class="sub">"settings"</span>
         </header>
         <main>
+            // Leaflet assets, loaded only on this page (injected into <head>).
+            <Stylesheet id="leaflet-css" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+            <Script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" />
+
+            <section class="panel">
+                <div class="panel-head"><h2>"Location"</h2></div>
+                <div class="settings-form">
+                    <p class="hint">
+                        "Click the map or drag the marker to set your station location.
+                        Used by BirdWeather uploads and the range filter."
+                    </p>
+                    <div id="location-map" class="loc-map"></div>
+                    <div class="latlon">
+                        <label class="field">
+                            <span>"Latitude"</span>
+                            <input class="device" type="number" step="0.00001" min="-90" max="90"
+                                prop:value=move || lat.get()
+                                on:input=move |ev| {
+                                    let v = event_target_value(&ev);
+                                    if let Ok(la) = v.trim().parse::<f64>() {
+                                        if let Ok(lo) = lon.get().trim().parse::<f64>() {
+                                            set_map_marker(la, lo);
+                                        }
+                                    }
+                                    lat.set(v);
+                                } />
+                        </label>
+                        <label class="field">
+                            <span>"Longitude"</span>
+                            <input class="device" type="number" step="0.00001" min="-180" max="180"
+                                prop:value=move || lon.get()
+                                on:input=move |ev| {
+                                    let v = event_target_value(&ev);
+                                    if let Ok(lo) = v.trim().parse::<f64>() {
+                                        if let Ok(la) = lat.get().trim().parse::<f64>() {
+                                            set_map_marker(la, lo);
+                                        }
+                                    }
+                                    lon.set(v);
+                                } />
+                        </label>
+                    </div>
+                </div>
+            </section>
+
             <section class="panel">
                 <div class="panel-head"><h2>"MQTT"</h2></div>
                 <div class="settings-form">
