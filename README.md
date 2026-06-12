@@ -6,7 +6,7 @@ identifies bird species with the BirdNET neural network, filters false
 positives, stores detections, saves audio clips, and shows them live in a web
 dashboard.
 
-<img width="1457" height="1339" alt="image_2026-06-02_19-34-49" src="https://github.com/user-attachments/assets/ff26da11-8764-4deb-9a45-1added507c52" />
+<img width="1324" height="873" alt="image" src="https://github.com/user-attachments/assets/30523fe8-69da-4b32-bc29-2c94f11aa082" />
 
 ## Pipeline
 
