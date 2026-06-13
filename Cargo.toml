@@ -1,6 +1,6 @@
 [package]
 name = "birdnet-rs"
-version = "0.1.0"
+version = "0.1.3"
 edition = "2024"
 description = "Rust port of birdnet-go: realtime bird-sound analyzer (Leptos fullstack + ONNX/BirdNET)"
 license = "MIT"
