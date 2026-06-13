@@ -3,9 +3,11 @@
 
 use chrono::Utc;
 use sea_orm::ActiveValue::Set;
+use sea_orm::sea_query::{Expr, Order};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, IntoActiveModel,
-    ModelTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, FromQueryResult,
+    IntoActiveModel, ModelTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    TransactionTrait,
 };
 use serde::Serialize;
 
@@ -221,6 +223,156 @@ pub async fn image_upsert(
     m.cached_at = Set(Utc::now());
     m.save(db).await?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Aggregation queries for the calendar + statistics pages. All day/month/year
+// bucketing keys off the denormalized `note.date` TEXT column (`YYYY-MM-DD`),
+// so they are pure string operations — no timezone math in SQL.
+// ---------------------------------------------------------------------------
+
+/// One species and how many times it was detected.
+#[derive(Debug, Clone, FromQueryResult)]
+pub struct SpeciesCount {
+    pub common_name: String,
+    pub scientific_name: String,
+    pub count: i64,
+}
+
+/// One calendar day and its detection count.
+#[derive(Debug, Clone, FromQueryResult)]
+pub struct DayCount {
+    pub day: String,
+    pub count: i64,
+}
+
+/// One time bucket (`YYYY-MM-DD` | `YYYY-MM` | `YYYY`) and its detection count.
+#[derive(Debug, Clone, FromQueryResult)]
+pub struct BucketCount {
+    pub bucket: String,
+    pub count: i64,
+}
+
+/// Top species by detection count within an optional timestamp window,
+/// most-detected first. `limit` caps the result.
+pub async fn species_counts(
+    db: &DatabaseConnection,
+    since: Option<chrono::DateTime<Utc>>,
+    until: Option<chrono::DateTime<Utc>>,
+    limit: u64,
+) -> anyhow::Result<Vec<SpeciesCount>> {
+    let mut cond = Condition::all();
+    if let Some(s) = since {
+        cond = cond.add(note::Column::Timestamp.gte(s));
+    }
+    if let Some(u) = until {
+        cond = cond.add(note::Column::Timestamp.lte(u));
+    }
+    let rows = note::Entity::find()
+        .select_only()
+        .column(note::Column::CommonName)
+        .column(note::Column::ScientificName)
+        .column_as(note::Column::Id.count(), "count")
+        .filter(cond)
+        .group_by(note::Column::ScientificName)
+        .group_by(note::Column::CommonName)
+        .order_by(note::Column::Id.count(), Order::Desc)
+        .limit(limit.max(1))
+        .into_model::<SpeciesCount>()
+        .all(db)
+        .await?;
+    Ok(rows)
+}
+
+/// Detections grouped by local calendar day, between two inclusive
+/// `YYYY-MM-DD` date strings (lexical comparison is correct for this format).
+pub async fn detections_per_day(
+    db: &DatabaseConnection,
+    from_date: &str,
+    to_date: &str,
+) -> anyhow::Result<Vec<DayCount>> {
+    let rows = note::Entity::find()
+        .select_only()
+        .column_as(note::Column::Date, "day")
+        .column_as(note::Column::Id.count(), "count")
+        .filter(note::Column::Date.gte(from_date))
+        .filter(note::Column::Date.lte(to_date))
+        .group_by(note::Column::Date)
+        .order_by_asc(note::Column::Date)
+        .into_model::<DayCount>()
+        .all(db)
+        .await?;
+    Ok(rows)
+}
+
+/// Detections grouped into time buckets between two inclusive `YYYY-MM-DD`
+/// dates. `granularity` is `"day"` (uses `date` verbatim), `"month"`
+/// (`substr(date,1,7)`), or `"year"` (`substr(date,1,4)`). An optional
+/// `scientific_name` restricts the count to a single species.
+pub async fn detections_by_bucket(
+    db: &DatabaseConnection,
+    granularity: &str,
+    from_date: &str,
+    to_date: &str,
+    scientific_name: Option<&str>,
+) -> anyhow::Result<Vec<BucketCount>> {
+    let bucket = match granularity {
+        "year" => Expr::cust("substr(date, 1, 4)"),
+        "month" => Expr::cust("substr(date, 1, 7)"),
+        _ => Expr::cust("date"),
+    };
+    let mut cond = Condition::all()
+        .add(note::Column::Date.gte(from_date))
+        .add(note::Column::Date.lte(to_date));
+    if let Some(name) = scientific_name {
+        cond = cond.add(note::Column::ScientificName.eq(name));
+    }
+    let rows = note::Entity::find()
+        .select_only()
+        .column_as(bucket.clone(), "bucket")
+        .column_as(note::Column::Id.count(), "count")
+        .filter(cond)
+        .group_by(bucket.clone())
+        .order_by(bucket, Order::Asc)
+        .into_model::<BucketCount>()
+        .all(db)
+        .await?;
+    Ok(rows)
+}
+
+/// Number of distinct species ever detected.
+pub async fn distinct_species_count(db: &DatabaseConnection) -> anyhow::Result<u64> {
+    #[derive(FromQueryResult)]
+    struct Scalar {
+        v: i64,
+    }
+    let row = note::Entity::find()
+        .select_only()
+        .column_as(Expr::cust("COUNT(DISTINCT scientific_name)"), "v")
+        .into_model::<Scalar>()
+        .one(db)
+        .await?;
+    Ok(row.map(|r| r.v.max(0) as u64).unwrap_or(0))
+}
+
+/// Earliest and latest detection dates (`YYYY-MM-DD`), if any detections exist.
+pub async fn date_bounds(db: &DatabaseConnection) -> anyhow::Result<Option<(String, String)>> {
+    #[derive(FromQueryResult)]
+    struct Bounds {
+        min_date: Option<String>,
+        max_date: Option<String>,
+    }
+    let row = note::Entity::find()
+        .select_only()
+        .column_as(note::Column::Date.min(), "min_date")
+        .column_as(note::Column::Date.max(), "max_date")
+        .into_model::<Bounds>()
+        .one(db)
+        .await?;
+    Ok(row.and_then(|b| match (b.min_date, b.max_date) {
+        (Some(a), Some(z)) => Some((a, z)),
+        _ => None,
+    }))
 }
 
 /// Of the given scientific names, which have a cached local image file.

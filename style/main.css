@@ -177,3 +177,49 @@ td.review .verdict { margin-left: 4px; font-weight: 700; }
   .controls { width: 100%; }
   .device, .search { flex: 1 1 auto; max-width: none; }
 }
+
+/* Calendar page — month heatmap */
+.cal-weekdays, .cal-grid {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px;
+}
+.cal-weekdays { margin-bottom: 4px; }
+.cal-weekday { color: #5b6376; font-size: 0.7rem; text-align: center; }
+.cal-cell {
+  aspect-ratio: 1; border-radius: 4px; background: #1b1f29;
+  border: 1px solid #262b36; cursor: pointer; position: relative;
+  display: flex; align-items: flex-start; justify-content: flex-end;
+  padding: 2px 4px;
+}
+.cal-cell:hover { border-color: #3a86ff; }
+.cal-cell.blank { background: transparent; border: none; cursor: default; }
+.cal-cell.selected { outline: 2px solid #3a86ff; outline-offset: -1px; }
+.cal-cell .cal-day { color: #8b93a7; font-size: 0.7rem; }
+.cal-cell .cal-count {
+  position: absolute; left: 4px; bottom: 2px;
+  color: #e6e6e6; font-size: 0.75rem; font-variant-numeric: tabular-nums;
+}
+
+/* Statistics page — summary cards */
+.stat-cards { display: flex; gap: 1rem; flex-wrap: wrap; }
+.stat-card {
+  background: #1b1f29; border: 1px solid #262b36; border-radius: 8px;
+  padding: 1rem 1.25rem; min-width: 140px; flex: 1 1 160px;
+}
+.stat-card .num {
+  font-size: 1.6rem; color: #e6e6e6; font-variant-numeric: tabular-nums;
+}
+.stat-card .lbl {
+  font-size: 0.75rem; color: #8b93a7; text-transform: uppercase;
+  margin-top: 0.25rem;
+}
+
+/* Chart canvases need a bounded box for Chart.js responsive sizing. */
+.chart-wrap { position: relative; height: 260px; width: 100%; }
+.chart-wrap.tall { height: 340px; }
+
+@media (max-width: 600px) {
+  .stat-cards { flex-direction: column; }
+  .chart-wrap { height: 220px; }
+  .chart-wrap.tall { height: 280px; }
+  .cal-cell .cal-day { font-size: 0.6rem; }
+}

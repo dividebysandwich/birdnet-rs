@@ -306,6 +306,92 @@ pub struct DetectionPage {
     pub page_size: u64,
 }
 
+/// One species and its detection count, as sent to the calendar/statistics UI.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SpeciesCountDto {
+    pub common_name: String,
+    pub scientific_name: String,
+    pub count: i64,
+}
+
+/// One calendar day and its detection count.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DayCountDto {
+    pub day: String,
+    pub count: i64,
+}
+
+/// One time bucket and its detection count.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct BucketCountDto {
+    pub bucket: String,
+    pub count: i64,
+}
+
+/// Everything the calendar page renders for one month + selected day.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CalendarData {
+    /// `YYYY-MM` the grid covers.
+    pub month: String,
+    /// Detection count per day within the month (heatmap).
+    pub days: Vec<DayCountDto>,
+    /// `YYYY-MM-DD` of the day whose breakdown is shown.
+    pub selected_day: String,
+    /// Top species on `selected_day`, most-detected first.
+    pub top_species: Vec<SpeciesCountDto>,
+    /// Total detections on `selected_day`.
+    pub day_total: i64,
+}
+
+/// Headline numbers for the statistics page.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct StatsSummary {
+    pub total_detections: u64,
+    pub distinct_species: u64,
+    pub busiest_day: String,
+    pub busiest_day_count: i64,
+    /// All-time top species, most-detected first.
+    pub top_species: Vec<SpeciesCountDto>,
+    /// `YYYY-MM-DD` of the first / last detection (empty if none).
+    pub first_date: String,
+    pub last_date: String,
+}
+
+/// A detections-over-time series for the statistics page.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TimeSeries {
+    /// `"day"` | `"month"` | `"year"`.
+    pub granularity: String,
+    pub points: Vec<BucketCountDto>,
+    /// Scientific name the series is restricted to (empty = all species).
+    pub species: String,
+}
+
+#[cfg(feature = "ssr")]
+impl From<crate::store::repo::SpeciesCount> for SpeciesCountDto {
+    fn from(s: crate::store::repo::SpeciesCount) -> SpeciesCountDto {
+        SpeciesCountDto {
+            common_name: s.common_name,
+            scientific_name: s.scientific_name,
+            count: s.count,
+        }
+    }
+}
+
+#[cfg(feature = "ssr")]
+impl From<crate::store::repo::DayCount> for DayCountDto {
+    fn from(d: crate::store::repo::DayCount) -> DayCountDto {
+        DayCountDto { day: d.day, count: d.count }
+    }
+}
+
+#[cfg(feature = "ssr")]
+impl From<crate::store::repo::BucketCount> for BucketCountDto {
+    fn from(b: crate::store::repo::BucketCount) -> BucketCountDto {
+        BucketCountDto { bucket: b.bucket, count: b.count }
+    }
+}
+
 /// Resolve a time-range `preset` (+ custom `from`/`to` `YYYY-MM-DD` dates) into
 /// a `(since, until)` UTC window.
 #[cfg(feature = "ssr")]
@@ -414,6 +500,147 @@ pub async fn review_detection(id: i32, verified: String) -> Result<(), ServerFnE
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+/// Server function: month heatmap + the selected day's species breakdown.
+/// `month` is `YYYY-MM`; `day` is `YYYY-MM-DD` (empty = pick a sensible default).
+#[server(endpoint = "calendar_data")]
+pub async fn get_calendar(month: String, day: String) -> Result<CalendarData, ServerFnError> {
+    use crate::server::AppState;
+    use crate::store::repo;
+
+    let state = expect_context::<AppState>();
+
+    // Default to the current local month when the client hasn't picked one yet.
+    let month = if month.len() == 7 && month.as_bytes().get(4) == Some(&b'-') {
+        month
+    } else {
+        chrono::Local::now().format("%Y-%m").to_string()
+    };
+
+    // Derive an inclusive day range covering the month. `-31` is a safe lexical
+    // upper bound: every real `YYYY-MM-DD` in the month sorts ≤ it.
+    let from = format!("{month}-01");
+    let to = format!("{month}-31");
+
+    let days: Vec<DayCountDto> = repo::detections_per_day(&state.db, &from, &to)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?
+        .into_iter()
+        .map(Into::into)
+        .collect();
+
+    // Default the selected day to the busiest day in the month (or the 1st).
+    let selected_day = if day.starts_with(&month) && day.len() == 10 {
+        day
+    } else {
+        days.iter()
+            .max_by_key(|d| d.count)
+            .map(|d| d.day.clone())
+            .unwrap_or(from)
+    };
+
+    let (since, until) = time_window("custom", &selected_day, &selected_day);
+    let top_species: Vec<SpeciesCountDto> = repo::species_counts(&state.db, since, until, 15)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let day_total = top_species.iter().map(|s| s.count).sum();
+
+    Ok(CalendarData { month, days, selected_day, top_species, day_total })
+}
+
+/// Server function: headline statistics across all detections.
+#[server(endpoint = "stats_summary")]
+pub async fn get_stats() -> Result<StatsSummary, ServerFnError> {
+    use crate::server::AppState;
+    use crate::store::repo;
+
+    let state = expect_context::<AppState>();
+    let err = |e: anyhow::Error| ServerFnError::new(e.to_string());
+
+    let total_detections = repo::count(&state.db).await.map_err(err)?;
+    let distinct_species = repo::distinct_species_count(&state.db).await.map_err(err)?;
+    let top_species: Vec<SpeciesCountDto> = repo::species_counts(&state.db, None, None, 15)
+        .await
+        .map_err(err)?
+        .into_iter()
+        .map(Into::into)
+        .collect();
+
+    let (first_date, last_date) = repo::date_bounds(&state.db).await.map_err(err)?.unwrap_or_default();
+
+    // Busiest day, derived from the per-day counts across the full range.
+    let (busiest_day, busiest_day_count) = if first_date.is_empty() {
+        (String::new(), 0)
+    } else {
+        repo::detections_per_day(&state.db, &first_date, &last_date)
+            .await
+            .map_err(err)?
+            .into_iter()
+            .max_by_key(|d| d.count)
+            .map(|d| (d.day, d.count))
+            .unwrap_or_default()
+    };
+
+    Ok(StatsSummary {
+        total_detections,
+        distinct_species,
+        busiest_day,
+        busiest_day_count,
+        top_species,
+        first_date,
+        last_date,
+    })
+}
+
+/// Server function: a detections-over-time series. `granularity` is
+/// `day`/`month`/`year`; `from`/`to` are `YYYY-MM-DD`; `species` (empty = all)
+/// restricts to one scientific name.
+#[server(endpoint = "stats_timeseries")]
+pub async fn stats_timeseries(
+    granularity: String,
+    from: String,
+    to: String,
+    species: String,
+) -> Result<TimeSeries, ServerFnError> {
+    use crate::server::AppState;
+    use crate::store::repo;
+
+    if !matches!(granularity.as_str(), "day" | "month" | "year") {
+        return Err(ServerFnError::new("granularity must be day, month, or year"));
+    }
+    let state = expect_context::<AppState>();
+    let sci = (!species.is_empty()).then_some(species.as_str());
+    // Empty bounds mean "unbounded"; `"0000"`/`"9999"` lexically bracket all
+    // real `YYYY-…` dates.
+    let from = if from.is_empty() { "0000".to_string() } else { from };
+    let to = if to.is_empty() { "9999".to_string() } else { to };
+    let points: Vec<BucketCountDto> = repo::detections_by_bucket(&state.db, &granularity, &from, &to, sci)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    Ok(TimeSeries { granularity, points, species })
+}
+
+/// Server function: all detected species (most-detected first) for the
+/// statistics page's species filter.
+#[server(endpoint = "species_list")]
+pub async fn species_list() -> Result<Vec<SpeciesCountDto>, ServerFnError> {
+    use crate::server::AppState;
+    use crate::store::repo;
+
+    let state = expect_context::<AppState>();
+    Ok(repo::species_counts(&state.db, None, None, 1000)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?
+        .into_iter()
+        .map(Into::into)
+        .collect())
+}
+
 /// Server function: the currently-active MQTT + BirdWeather settings.
 #[server(endpoint = "get_integration_config")]
 pub async fn get_integration_config() -> Result<IntegrationConfig, ServerFnError> {
@@ -494,6 +721,8 @@ fn NavMenu() -> impl IntoView {
             </button>
             <div class="nav-links" class:open=move || open.get()>
                 <A href="/" on:click=close>"Dashboard"</A>
+                <A href="/calendar" on:click=close>"Calendar"</A>
+                <A href="/statistics" on:click=close>"Statistics"</A>
                 <A href="/settings" on:click=close>"Settings"</A>
             </div>
         </nav>
@@ -514,6 +743,9 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
                 // Location-picker glue (defines window.birdnetInitMap); tiny, and
                 // only wires up Leaflet which is loaded on the settings page.
                 <script src="/map.js"></script>
+                // Chart glue (defines window.birdnetChart); Chart.js itself is
+                // loaded only on the calendar + statistics pages.
+                <script src="/charts.js"></script>
             </head>
             <body>
                 <App />
@@ -531,6 +763,8 @@ pub fn App() -> impl IntoView {
         <Router>
             <Routes fallback=|| "Not found.".into_view()>
                 <Route path=StaticSegment("") view=Dashboard />
+                <Route path=StaticSegment("calendar") view=CalendarPage />
+                <Route path=StaticSegment("statistics") view=StatisticsPage />
                 <Route path=StaticSegment("settings") view=SettingsPage />
             </Routes>
         </Router>
@@ -758,7 +992,7 @@ fn Dashboard() -> impl IntoView {
                             <tbody>
                                 <For
                                     each=move || page_res.get().map(|p| p.items).unwrap_or_default()
-                                    key=|d| (d.id, d.verified.clone())
+                                    key=|d| (d.id, d.verified.clone(), d.image_url.is_some())
                                     let:d
                                 >
                                     {detection_row(d, ui.reload)}
@@ -830,6 +1064,31 @@ fn set_map_marker(lat: f64, lon: f64) {
 #[cfg(not(feature = "hydrate"))]
 fn set_map_marker(_lat: f64, _lon: f64) {}
 
+// ---------------------------------------------------------------------------
+// Chart.js bindings (driven via the `/charts.js` JS glue).
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "hydrate")]
+mod charts {
+    use wasm_bindgen::prelude::*;
+    #[wasm_bindgen]
+    extern "C" {
+        #[wasm_bindgen(js_name = birdnetChart)]
+        pub fn render(el_id: &str, kind: &str, labels_json: &str, values_json: &str, label: &str);
+    }
+}
+
+/// Render a Chart.js chart into canvas `el_id`. `kind` is `"bar"` or `"line"`.
+/// Client-only; a no-op on the server (charts render after hydration).
+#[cfg(feature = "hydrate")]
+fn render_chart(el_id: &str, kind: &str, labels: &[String], values: &[i64], label: &str) {
+    let labels_json = serde_json::to_string(labels).unwrap_or_else(|_| "[]".into());
+    let values_json = serde_json::to_string(values).unwrap_or_else(|_| "[]".into());
+    charts::render(el_id, kind, &labels_json, &values_json, label);
+}
+#[cfg(not(feature = "hydrate"))]
+fn render_chart(_el_id: &str, _kind: &str, _labels: &[String], _values: &[i64], _label: &str) {}
+
 /// Update a detection's review status on the server, then bump `reload` so the
 /// detections resource refetches and the row reflects the new status.
 fn submit_review(id: i32, status: &'static str, reload: RwSignal<u32>) {
@@ -840,9 +1099,10 @@ fn submit_review(id: i32, status: &'static str, reload: RwSignal<u32>) {
     });
 }
 
-/// Render one detection row. Review status is static per render; the row is
-/// re-created when `verified` changes (it's part of the `For` key), so reviews
-/// reflect after the resource refetches.
+/// Render one detection row. Review status and the image URL are static per
+/// render; the row is re-created when `verified` changes or when its species
+/// image first becomes available (both are part of the `For` key), so reviews
+/// and late-arriving thumbnails reflect after the resource refetches.
 fn detection_row(d: DetectionDto, reload: RwSignal<u32>) -> impl IntoView {
     let pct = (d.confidence * 100.0).round() as i32;
     let id = d.id;
@@ -1175,6 +1435,289 @@ fn SettingsPage() -> impl IntoView {
                 </button>
                 <span class="save-status">{move || status.get()}</span>
             </div>
+        </main>
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Calendar page: month heatmap + the selected day's species breakdown.
+// ---------------------------------------------------------------------------
+
+/// Build the 7-column month grid (Mon-first) for `month` (`YYYY-MM`), shading
+/// each day by its detection count and wiring clicks to `day_sig`.
+fn calendar_cells(data: &CalendarData, day_sig: RwSignal<String>) -> Vec<AnyView> {
+    use chrono::{Datelike, NaiveDate};
+
+    let mut parts = data.month.split('-');
+    let year: i32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(2000);
+    let month: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+
+    let Some(first) = NaiveDate::from_ymd_opt(year, month, 1) else {
+        return Vec::new();
+    };
+    let lead = first.weekday().num_days_from_monday(); // 0 = Monday
+    let (ny, nm) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+    let days_in_month = NaiveDate::from_ymd_opt(ny, nm, 1)
+        .and_then(|d| d.pred_opt())
+        .map(|d| d.day())
+        .unwrap_or(30);
+
+    let max = data.days.iter().map(|d| d.count).max().unwrap_or(0).max(1) as f64;
+    let selected = data.selected_day.clone();
+
+    let mut cells: Vec<AnyView> = Vec::new();
+    // Leading blanks so the 1st lands under its weekday.
+    for _ in 0..lead {
+        cells.push(view! { <div class="cal-cell blank"></div> }.into_any());
+    }
+    for d in 1..=days_in_month {
+        let date = format!("{year:04}-{month:02}-{d:02}");
+        let count = data.days.iter().find(|x| x.day == date).map(|x| x.count).unwrap_or(0);
+        let alpha = if count > 0 { 0.15 + 0.75 * (count as f64 / max) } else { 0.0 };
+        let bg = format!("rgba(58,134,255,{alpha:.3})");
+        let is_sel = date == selected;
+        let on_click = {
+            let date = date.clone();
+            move |_| day_sig.set(date.clone())
+        };
+        cells.push(
+            view! {
+                <div class="cal-cell" class:selected=is_sel
+                    style:background-color=bg
+                    title=format!("{date}: {count}")
+                    on:click=on_click>
+                    <span class="cal-day">{d.to_string()}</span>
+                    {(count > 0).then(|| view! { <span class="cal-count">{count.to_string()}</span> })}
+                </div>
+            }
+            .into_any(),
+        );
+    }
+    cells
+}
+
+#[component]
+fn CalendarPage() -> impl IntoView {
+    // Empty `month` lets the server default to the current month; `day` empty
+    // lets it default to the busiest day. Both are absolute strings thereafter.
+    let month = RwSignal::new(String::new());
+    let day = RwSignal::new(String::new());
+
+    let data = Resource::new(
+        move || (month.get(), day.get()),
+        |(m, d)| async move { get_calendar(m, d).await.unwrap_or_default() },
+    );
+
+    // Mirror the server-resolved month/day into signals so the always-visible
+    // controls read a signal (not the resource) and avoid hydration warnings.
+    let disp_month = RwSignal::new(String::new());
+    let disp_day = RwSignal::new(String::new());
+
+    // Re-render the day breakdown chart and refresh the display labels whenever
+    // the data changes (client-only).
+    Effect::new(move |_| {
+        let d = data.get().unwrap_or_default();
+        disp_month.set(d.month.clone());
+        disp_day.set(d.selected_day.clone());
+        let labels: Vec<String> = d.top_species.iter().map(|s| s.common_name.clone()).collect();
+        let values: Vec<i64> = d.top_species.iter().map(|s| s.count).collect();
+        render_chart("cal-day-chart", "bar", &labels, &values, "Detections");
+    });
+
+    const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+    view! {
+        <Script src="https://cdn.jsdelivr.net/npm/chart.js" />
+        <header>
+            <NavMenu />
+            <h1>"Calendar"</h1>
+            <span class="sub">"detections by day"</span>
+        </header>
+        <main>
+            <section class="panel">
+                <div class="panel-head">
+                    <h2>"Month"</h2>
+                    <div class="controls">
+                        <input class="device" type="month"
+                            prop:value=move || disp_month.get()
+                            on:change=move |ev| {
+                                month.set(event_target_value(&ev));
+                                day.set(String::new());
+                            } />
+                    </div>
+                </div>
+                <Transition fallback=|| ()>
+                    <div class="cal-weekdays">
+                        {WEEKDAYS.iter().map(|w| view! { <div class="cal-weekday">{*w}</div> })
+                            .collect::<Vec<_>>()}
+                    </div>
+                    <div class="cal-grid">
+                        {move || data.get().map(|d| calendar_cells(&d, day)).unwrap_or_default()}
+                    </div>
+                </Transition>
+            </section>
+
+            <section class="panel">
+                <div class="panel-head">
+                    <h2>
+                        "Top species on "
+                        {move || disp_day.get()}
+                    </h2>
+                </div>
+                <Transition fallback=|| ()>
+                    <Show
+                        when=move || !data.get().map(|d| d.top_species.is_empty()).unwrap_or(true)
+                        fallback=|| view! { <div class="empty">"No detections that day."</div> }
+                    >
+                        <div class="chart-wrap"><canvas id="cal-day-chart"></canvas></div>
+                    </Show>
+                </Transition>
+            </section>
+        </main>
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Statistics page: summary cards, all-time top species, detections over time.
+// ---------------------------------------------------------------------------
+
+#[component]
+fn StatisticsPage() -> impl IntoView {
+    let granularity = RwSignal::new("month".to_string());
+    let from = RwSignal::new(String::new());
+    let to = RwSignal::new(String::new());
+    let species = RwSignal::new(String::new());
+
+    let summary = Resource::new(|| (), |_| async move { get_stats().await.unwrap_or_default() });
+    let species_opts =
+        Resource::new(|| (), |_| async move { species_list().await.unwrap_or_default() });
+    let series = Resource::new(
+        move || (granularity.get(), from.get(), to.get(), species.get()),
+        |(g, f, t, s)| async move { stats_timeseries(g, f, t, s).await.unwrap_or_default() },
+    );
+
+    // Seed the date range from the data's first/last detection, once.
+    Effect::new(move |_| {
+        if let Some(s) = summary.get()
+            && from.get_untracked().is_empty()
+            && !s.first_date.is_empty()
+        {
+            from.set(s.first_date);
+            to.set(s.last_date);
+        }
+    });
+
+    // Render the all-time top-species bar chart.
+    Effect::new(move |_| {
+        let s = summary.get().unwrap_or_default();
+        let labels: Vec<String> = s.top_species.iter().map(|x| x.common_name.clone()).collect();
+        let values: Vec<i64> = s.top_species.iter().map(|x| x.count).collect();
+        render_chart("stats-top-chart", "bar", &labels, &values, "Detections");
+    });
+
+    // Render the detections-over-time line chart.
+    Effect::new(move |_| {
+        let s = series.get().unwrap_or_default();
+        let labels: Vec<String> = s.points.iter().map(|p| p.bucket.clone()).collect();
+        let values: Vec<i64> = s.points.iter().map(|p| p.count).collect();
+        render_chart("stats-series-chart", "line", &labels, &values, "Detections");
+    });
+
+    let stat = move |f: fn(&StatsSummary) -> String| {
+        move || summary.get().map(|s| f(&s)).unwrap_or_default()
+    };
+
+    view! {
+        <Script src="https://cdn.jsdelivr.net/npm/chart.js" />
+        <header>
+            <NavMenu />
+            <h1>"Statistics"</h1>
+            <span class="sub">"detection trends"</span>
+        </header>
+        <main>
+            <section class="panel">
+                <div class="panel-head"><h2>"Overview"</h2></div>
+                <Transition fallback=|| ()>
+                    <div class="stat-cards">
+                        <div class="stat-card">
+                            <div class="num">{stat(|s| s.total_detections.to_string())}</div>
+                            <div class="lbl">"Total detections"</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="num">{stat(|s| s.distinct_species.to_string())}</div>
+                            <div class="lbl">"Species"</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="num">{stat(|s| {
+                                if s.busiest_day.is_empty() { "—".into() }
+                                else { format!("{} ({})", s.busiest_day, s.busiest_day_count) }
+                            })}</div>
+                            <div class="lbl">"Busiest day"</div>
+                        </div>
+                    </div>
+                </Transition>
+            </section>
+
+            <section class="panel">
+                <div class="panel-head"><h2>"Most detected species (all time)"</h2></div>
+                <Transition fallback=|| ()>
+                    <Show
+                        when=move || !summary.get().map(|s| s.top_species.is_empty()).unwrap_or(true)
+                        fallback=|| view! { <div class="empty">"No detections yet."</div> }
+                    >
+                        <div class="chart-wrap tall"><canvas id="stats-top-chart"></canvas></div>
+                    </Show>
+                </Transition>
+            </section>
+
+            <section class="panel">
+                <div class="panel-head">
+                    <h2>"Detections over time"</h2>
+                    <div class="controls filter-controls">
+                        <select class="device" title="Granularity"
+                            prop:value=move || granularity.get()
+                            on:change=move |ev| granularity.set(event_target_value(&ev))>
+                            <option value="day">"By day"</option>
+                            <option value="month">"By month"</option>
+                            <option value="year">"By year"</option>
+                        </select>
+                        <select class="device" title="Species"
+                            prop:value=move || species.get()
+                            on:change=move |ev| species.set(event_target_value(&ev))>
+                            <option value="">"All species"</option>
+                            <Transition fallback=|| ()>
+                                <For
+                                    each=move || species_opts.get().unwrap_or_default()
+                                    key=|s| s.scientific_name.clone()
+                                    let:s
+                                >
+                                    <option value=s.scientific_name.clone()>{s.common_name.clone()}</option>
+                                </For>
+                            </Transition>
+                        </select>
+                    </div>
+                </div>
+                <div class="date-range">
+                    <label>"From"
+                        <input class="device" type="date"
+                            prop:value=move || from.get()
+                            on:change=move |ev| from.set(event_target_value(&ev)) />
+                    </label>
+                    <label>"To"
+                        <input class="device" type="date"
+                            prop:value=move || to.get()
+                            on:change=move |ev| to.set(event_target_value(&ev)) />
+                    </label>
+                </div>
+                <Transition fallback=|| ()>
+                    <Show
+                        when=move || !series.get().map(|s| s.points.is_empty()).unwrap_or(true)
+                        fallback=|| view! { <div class="empty">"No detections in this range."</div> }
+                    >
+                        <div class="chart-wrap tall"><canvas id="stats-series-chart"></canvas></div>
+                    </Show>
+                </Transition>
+            </section>
         </main>
     }
 }
